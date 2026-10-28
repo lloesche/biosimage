@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>biosimage – BIOS boot logo editor</title>
+  <meta name="description" content="Replace the boot logo in AMI Aptio / UEFI BIOS files, entirely in your browser. Nothing is uploaded.">
+  <meta name="theme-color" content="#0000a8">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%230000a8'/%3E%3Crect x='2' y='3' width='12' height='2' fill='%23aaa'/%3E%3Crect x='2' y='7' width='8' height='2' fill='%23ff5'/%3E%3Crect x='2' y='11' width='10' height='2' fill='%23aaa'/%3E%3C/svg%3E">
+  <link rel="preload" href="fonts/VT323-Regular.ttf" as="font" type="font/ttf" crossorigin>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="titlebar">
+    <span>biosimage Setup Utility – Boot Logo Editor</span>
+    <span id="version"></span>
+    <span class="local">runs locally · nothing is uploaded</span>
+  </header>
+  <nav class="tabs" aria-label="Steps">
+    <a href="#step-fw" class="tab" id="tab-fw">Main</a>
+    <a href="#step-img" class="tab" id="tab-img">Logo</a>
+    <a href="#step-build" class="tab" id="tab-build">Save &amp; Exit</a>
+  </nav>
+
+  <div class="frame">
+    <main class="main">
+      <div id="wasm-error" class="error" role="alert" hidden></div>
+
+      <div class="dialog" role="note" data-help="biosimage changes only the logo, re-checks the whole firmware volume and verifies the result before you can download it.&#10;&#10;Still, a BIOS flash is never risk-free: make sure you can recover your board before flashing.">
+        <div class="dialog-title">WARNING</div>
+        <p>Flashing modified firmware can leave your board unbootable. Continue only if you have a
+          recovery path (USB BIOS FlashBack, dual BIOS or an SPI programmer) and keep the original
+          BIOS file.</p>
+      </div>
+
+      <!-- Step 1: firmware -->
+      <section class="step" id="step-fw">
+        <h2>BIOS File</h2>
+        <label class="drop" id="fw-drop" tabindex="0" data-help="Drop the BIOS file exactly as downloaded from your board vendor (for ASUS a .CAP file), or a raw flash dump (.ROM/.BIN).&#10;&#10;The file is read by your browser only. It is never uploaded.">
+          <input type="file" id="fw-input" hidden>
+          <span class="drop-main" id="fw-drop-main">[ Drop BIOS file here ]</span>
+          <span class="drop-sub">or press Enter to browse · .CAP .ROM .BIN</span>
+        </label>
+        <p class="error" id="fw-error" role="alert" hidden></p>
+        <div class="info" id="fw-info" hidden>
+          <dl class="rows" id="fw-facts"></dl>
+          <figure class="shot" data-help="The logo currently stored in this BIOS file, decoded from the firmware.">
+            <div class="picture"><img id="fw-logo" alt="Current boot logo"></div>
+            <figcaption id="fw-logo-caption"></figcaption>
+          </figure>
+          <div class="hexview" id="fw-hex" data-help="The first bytes of the logo file inside your BIOS.&#10;&#10;Yellow: file GUID (bytes 0–15).&#10;&#10;Cyan: header checksum, data checksum, file type, attributes, 24-bit size and state (bytes 16–23).&#10;&#10;White: the first section header, e.g. 02 = GUID-defined section followed by the LZMA GUID EE4E5898-…"></div>
+        </div>
+      </section>
+
+      <!-- Step 2: image -->
+      <section class="step locked" id="step-img">
+        <h2>New Logo</h2>
+        <p class="locked-note">— Load a BIOS file first —</p>
+        <label class="drop" id="img-drop" tabindex="0" data-help="Any image your browser can open: PNG, SVG, JPEG, GIF, BMP, WebP.&#10;&#10;Transparent areas are filled with the background colour. A simple logo on black looks best.">
+          <input type="file" id="img-input" accept="image/*,.svg,.bmp" hidden>
+          <span class="drop-main" id="img-drop-main">[ Drop image here ]</span>
+          <span class="drop-sub">or press Enter to browse · PNG SVG JPEG GIF BMP WebP</span>
+        </label>
+        <p class="error" id="img-error" role="alert" hidden></p>
+
+        <div class="editor" id="editor" hidden>
+          <div class="controls">
+            <div class="field" data-help="24-bit BMP: your image is placed on a canvas and converted to the format the firmware handles most reliably. Recommended.&#10;&#10;File as-is: inserts your file unchanged, e.g. to keep an animated GIF. The firmware may not show every format.">
+              <span class="k">Output</span>
+              <span class="v">
+                <label class="opt"><input type="radio" name="mode" value="bmp" checked><span>24-bit BMP</span></label>
+                <label class="opt" id="mode-asis-label"><input type="radio" name="mode" value="asis"><span>File as-is</span></label>
+              </span>
+            </div>
+            <p class="hint" id="mode-hint"></p>
+            <fieldset id="layout">
+              <div class="field" data-help="Size of the logo bitmap in pixels (max. 800 × 600). It starts at the size of the original logo.&#10;&#10;The firmware draws the bitmap unscaled and centred on a black screen.">
+                <span class="k">Canvas</span>
+                <span class="v">
+                  <span class="num">[<input type="number" id="cw" min="16" max="800" step="1" aria-label="Canvas width">]</span>
+                  ×
+                  <span class="num">[<input type="number" id="ch" min="16" max="600" step="1" aria-label="Canvas height">]</span>
+                  <button type="button" class="key" id="size-reset">[Original]</button>
+                </span>
+              </div>
+              <div class="field" data-help="Background colour of the canvas. Keep it black so the logo blends into the black boot screen.">
+                <span class="k">Background</span>
+                <span class="v"><input type="color" id="bg" value="#000000" aria-label="Background colour"> <span id="bg-hex">#000000</span></span>
+              </div>
+              <div class="field" data-help="How large the image is drawn inside the canvas.">
+                <span class="k">Logo Size</span>
+                <span class="v"><input type="range" id="scale" min="10" max="100" value="80" aria-label="Logo size"> <output id="scale-out">80%</output></span>
+              </div>
+              <div class="field" data-help="Move the image left or right inside the canvas.">
+                <span class="k">Horizontal</span>
+                <span class="v"><input type="range" class="center" id="ox" min="-50" max="50" value="0" aria-label="Horizontal position"> <output id="ox-out">Centre</output></span>
+              </div>
+              <div class="field" data-help="Move the image up or down inside the canvas.">
+                <span class="k">Vertical</span>
+                <span class="v"><input type="range" class="center" id="oy" min="-50" max="50" value="0" aria-label="Vertical position"> <output id="oy-out">Centre</output></span>
+              </div>
+              <div class="field">
+                <span class="k"></span>
+                <span class="v"><button type="button" class="key" id="center">[Centre logo]</button></span>
+              </div>
+            </fieldset>
+          </div>
+          <figure class="preview" data-help="Preview at real size on a 1920 × 1080 screen. On lower resolutions the logo appears larger, because the firmware does not scale it.">
+            <div class="monitor" id="screen"><canvas id="canvas"></canvas></div>
+            <figcaption id="preview-caption"></figcaption>
+          </figure>
+        </div>
+      </section>
+
+      <!-- Step 3: build -->
+      <section class="step locked" id="step-build">
+        <h2>Save &amp; Exit</h2>
+        <p class="locked-note">— Choose a new logo first —</p>
+        <ul class="warnings" id="img-warnings" hidden></ul>
+        <label class="opt" id="force-label" hidden data-help="The firmware may fail to show this image. If it does, the screen stays black during boot; the BIOS itself still works."><input type="checkbox" id="force"><span>Insert the image anyway</span></label>
+        <div class="field" data-help="By default the logo is LZMA-compressed like the original. Only store it uncompressed if your board does not show a compressed logo.">
+          <span class="k">Compression</span>
+          <span class="v"><label class="opt"><input type="checkbox" id="nocompress"><span>Store uncompressed</span></label></span>
+        </div>
+        <button type="button" class="selbar" id="build" data-help="Builds the patched BIOS in your browser, then reads it back from scratch to verify the firmware and the new logo.&#10;&#10;Shortcut: Ctrl+S (⌘S on a Mac) or F10."><span>Create Patched BIOS</span><span>[<span class="save-key">Ctrl+S</span> / F10]</span></button>
+        <p class="error" id="build-error" role="alert" hidden></p>
+
+        <div class="result" id="result" hidden>
+          <dl class="rows">
+            <dt>New Logo File</dt>
+            <dd><span class="meter"><span id="usage-bar"></span></span> <span id="usage-size"></span></dd>
+            <dt>Placement</dt>
+            <dd id="usage-text"></dd>
+            <dt>Verification</dt>
+            <dd class="ok">Passed – logo read back from the patched file</dd>
+          </dl>
+          <figure class="shot" data-help="This image was decoded from the patched BIOS file you are about to download.">
+            <div class="picture"><img id="readback" alt="Logo read back from the patched BIOS"></div>
+            <figcaption>Read back from the patched file</figcaption>
+          </figure>
+          <div class="hexview" id="new-hex" data-help="The rebuilt logo file in the patched BIOS: same GUID, new size and freshly calculated header checksum."></div>
+          <a class="selbar" id="download" data-help="Saves the patched BIOS to your computer. Keep the original file as well."><span>Save Changes and Download</span><span id="download-name"></span></a>
+          <div id="flash-help"></div>
+        </div>
+      </section>
+    </main>
+
+    <aside class="help" aria-live="polite">
+      <h3>Item Specific Help</h3>
+      <div id="help-text"></div>
+    </aside>
+  </div>
+
+  <footer class="keys">
+    <span>Tab: Select Item &nbsp; Enter: Select &nbsp; <b class="save-key">Ctrl+S</b> / <b>F10</b>: Save &amp; Download</span>
+    <span><a href="https://github.com/lloesche/biosimage">github.com/lloesche/biosimage</a> · MIT</span>
+  </footer>
+
+  <script src="wasm_exec.js"></script>
+  <script src="app.js" type="module"></script>
+</body>
+</html>

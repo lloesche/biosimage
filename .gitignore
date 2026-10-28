@@ -1,0 +1,24 @@
+# binaries
+/biosimage
+/biosimage.exe
+/dist/
+/build/
+
+# web app build output (go run ./cmd/buildweb)
+/web/biosimage.wasm
+/web/wasm_exec.js
+/web/version.txt
+
+# firmware images and logos used for testing are not part of the repo
+*.cap
+*.CAP
+*.rom
+*.ROM
+*.bin
+*.BIN
+/*.bmp
+/*.png
+/*.jpg
+/*.gif
+/web/*.bmp
+/web/_test/

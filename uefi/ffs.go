@@ -10,6 +10,7 @@ import (
 const (
 	FileTypeRaw      = 0x01
 	FileTypeFreeform = 0x02
+	FileTypeFVImage  = 0x0B
 	FileTypePad      = 0xF0
 )
 

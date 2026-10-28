@@ -13,6 +13,7 @@ const (
 	SectionCompression = 0x01
 	SectionGUIDDefined = 0x02
 	SectionUI          = 0x15
+	SectionFVImage     = 0x17
 	SectionRaw         = 0x19
 )
 
@@ -26,6 +27,7 @@ const (
 type Section struct {
 	Type       byte
 	HeaderSize int
+	Offset     int // relative to the start of the parsed data
 	Raw        []byte
 }
 
@@ -46,7 +48,7 @@ func ParseSections(b []byte) ([]Section, error) {
 		if size < hs || size > len(b)-p {
 			return nil, fmt.Errorf("corrupt section header at %#x", p)
 		}
-		secs = append(secs, Section{Type: b[p+3], HeaderSize: hs, Raw: b[p : p+size]})
+		secs = append(secs, Section{Type: b[p+3], HeaderSize: hs, Offset: p, Raw: b[p : p+size]})
 		p = alignUp(p+size, 4)
 	}
 	return secs, nil

@@ -26,8 +26,21 @@ func (e Encoding) String() string {
 	return [...]string{"raw file", "uncompressed section", "LZMA-compressed section", "unsupported encapsulation"}[e]
 }
 
-// ErrLogoNotFound is returned when no logo file is present in a top-level volume.
-var ErrLogoNotFound = errors.New("logo file not found in any top-level firmware volume")
+// ErrLogoNotFound is returned when no logo file is present in the image.
+var ErrLogoNotFound = errors.New("logo file not found")
+
+// Container is an LZMA-compressed section of a firmware-volume file whose contents hold
+// another firmware volume. Some vendors (e.g. MSI on Intel boards) keep the logo only in
+// such a compressed main volume.
+type Container struct {
+	Volume *Volume // volume in the image that holds File
+	File   File
+	secs   []Section
+	idx    int // index of the LZMA section in secs
+	lzma   lzmaParams
+	attrs  uint16
+	data   []byte // decompressed section contents
+}
 
 // Logo is a logo file found in an image.
 type Logo struct {
@@ -39,6 +52,9 @@ type Logo struct {
 	Name     string // UI section name, if any
 	// Capacity is the largest replacement file (header included) that fits.
 	Capacity int
+	// Container is set when the logo is inside a compressed volume. Volume and File
+	// offsets are then relative to the container's decompressed data.
+	Container *Container
 
 	top      []Section
 	topIdx   int // section holding the image (raw or encapsulation)
@@ -48,10 +64,35 @@ type Logo struct {
 	gAttrs   uint16
 }
 
-// FindLogos returns every file with the given GUID in the top-level volumes of buf.
+// FindLogos returns every file with the given GUID in the volumes of buf, including
+// uncompressed volumes nested inside files. Only if there is none, it also looks inside
+// LZMA-compressed volumes.
 func FindLogos(buf []byte, guid GUID) ([]*Logo, error) {
+	logos, err := findLogos(buf, guid)
+	if err != nil {
+		return nil, err
+	}
+	if len(logos) == 0 {
+		for _, c := range compressedVolumes(buf) {
+			inner, err := findLogos(c.data, guid)
+			if err != nil {
+				return nil, fmt.Errorf("compressed volume in file at %#x: %w", c.File.Offset, err)
+			}
+			for _, l := range inner {
+				l.Container = c
+			}
+			logos = append(logos, inner...)
+		}
+	}
+	if len(logos) == 0 {
+		return nil, ErrLogoNotFound
+	}
+	return logos, nil
+}
+
+func findLogos(buf []byte, guid GUID) ([]*Logo, error) {
 	var logos []*Logo
-	for _, v := range FindVolumes(buf) {
+	for _, v := range AllVolumes(buf) {
 		files, used, err := v.Files(buf)
 		if err != nil {
 			continue // not something we could patch safely anyway
@@ -72,13 +113,46 @@ func FindLogos(buf []byte, guid GUID) ([]*Logo, error) {
 			logos = append(logos, l)
 		}
 	}
-	if len(logos) == 0 {
-		if bytes.Contains(buf, guid[:]) {
-			return nil, fmt.Errorf("%w (the GUID does occur in the image, probably inside a compressed volume, which is not supported)", ErrLogoNotFound)
-		}
-		return nil, ErrLogoNotFound
-	}
 	return logos, nil
+}
+
+// compressedVolumes returns the LZMA sections of firmware-volume files that hold a volume.
+func compressedVolumes(buf []byte) []*Container {
+	var out []*Container
+	for _, v := range AllVolumes(buf) {
+		files, _, err := v.Files(buf)
+		if err != nil {
+			continue
+		}
+		for _, f := range files {
+			if f.Type != FileTypeFVImage {
+				continue
+			}
+			secs, err := ParseSections(buf[f.DataOffset():f.End()])
+			if err != nil {
+				continue
+			}
+			for i, s := range secs {
+				if s.Type != SectionGUIDDefined {
+					continue
+				}
+				g, off, attrs, err := s.guidedHeader()
+				if err != nil || g != LZMASectionGUID {
+					continue
+				}
+				payload := s.Raw[off:]
+				data, err := lzmaDecompress(payload)
+				if err != nil || len(FindVolumes(data)) == 0 {
+					continue
+				}
+				out = append(out, &Container{
+					Volume: v, File: f, secs: secs, idx: i, attrs: attrs, data: data,
+					lzma: lzmaParams{props: payload[0], dict: binary.LittleEndian.Uint32(payload[1:])},
+				})
+			}
+		}
+	}
+	return out
 }
 
 func decodeLogo(buf []byte, v *Volume, f File) (*Logo, error) {
@@ -213,6 +287,8 @@ type Change struct {
 	NewSize      int
 	Placement    string
 	Storage      string
+	// Container describes the compressed volume the logo was in, if any.
+	Container string
 }
 
 // ReplaceLogo returns a copy of buf with every logo file (gEfiDefaultBmpLogoGuid unless
@@ -222,38 +298,116 @@ func ReplaceLogo(buf, img []byte, guid GUID, opt ReplaceOptions) ([]byte, []Chan
 	if err != nil {
 		return nil, nil, err
 	}
-	seen := map[int]bool{}
+	var direct []*Logo
+	var containers []*Container
+	inside := map[*Container][]*Logo{}
 	for _, l := range logos {
-		if seen[l.Volume.Offset] {
-			return nil, nil, fmt.Errorf("volume at %#x contains more than one logo file; not supported", l.Volume.Offset)
+		if l.Container == nil {
+			direct = append(direct, l)
+			continue
 		}
-		seen[l.Volume.Offset] = true
+		if inside[l.Container] == nil {
+			containers = append(containers, l.Container)
+		}
+		inside[l.Container] = append(inside[l.Container], l)
 	}
+
 	out := bytes.Clone(buf)
-	var changes []Change
-	for _, l := range logos {
-		data, storage, err := l.rebuildData(img, opt)
+	changes, err := replaceIn(out, direct, img, guid, opt)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, c := range containers {
+		data := bytes.Clone(c.data)
+		inner, err := replaceIn(data, inside[c], img, guid, opt)
 		if err != nil {
 			return nil, nil, err
 		}
-		nf, err := BuildFile(l.File.GUID, l.File.Type, l.File.Attributes, data, l.Volume.EraseByte())
+		payload, err := lzmaCompress(data, c.lzma)
+		if err != nil {
+			return nil, nil, err
+		}
+		parts := make([][]byte, len(c.secs))
+		for i, s := range c.secs {
+			parts[i] = s.Raw
+		}
+		parts[c.idx] = newGuidedSection(LZMASectionGUID, c.attrs, payload)
+		nf, err := BuildFile(c.File.GUID, c.File.Type, c.File.Attributes, JoinSections(parts...), c.Volume.EraseByte())
 		if err != nil {
 			return nil, nil, err
 		}
 		before := bytes.Clone(out)
-		pos, placement, err := placeFile(out, l.Volume, l.File, nf)
+		pos, placement, err := placeFile(out, c.Volume, c.File, nf)
 		if err != nil {
-			return nil, nil, fmt.Errorf("volume at %#x: %w", l.Volume.Offset, err)
+			return nil, nil, fmt.Errorf("compressed volume in file at %#x: %w", c.File.Offset, err)
 		}
-		if err := verifyVolume(before, out, l.Volume, guid, img); err != nil {
-			return nil, nil, fmt.Errorf("verification of volume at %#x failed: %w", l.Volume.Offset, err)
+		if err := verifyVolume(before, out, c.Volume, c.File.GUID); err != nil {
+			return nil, nil, fmt.Errorf("verification of volume at %#x failed: %w", c.Volume.Offset, err)
+		}
+		if err := fixParents(before, out, c.Volume); err != nil {
+			return nil, nil, fmt.Errorf("volume at %#x: %w", c.Volume.Offset, err)
+		}
+		desc := fmt.Sprintf("inside compressed volume file %s at %#x, recompressed %d -> %d bytes, %s",
+			c.File.GUID, pos, c.File.Size, len(nf), placement)
+		for i := range inner {
+			inner[i].Container = desc
+		}
+		changes = append(changes, inner...)
+	}
+
+	// Final check: parse the patched image from scratch; every logo must decode to img.
+	check, err := FindLogos(out, guid)
+	if err != nil {
+		return nil, nil, fmt.Errorf("verification failed: %w", err)
+	}
+	if len(check) != len(logos) {
+		return nil, nil, fmt.Errorf("verification failed: %d logo files after patching, %d before", len(check), len(logos))
+	}
+	for _, l := range check {
+		if !bytes.Equal(l.Image, img) {
+			return nil, nil, fmt.Errorf("verification failed: logo at %#x does not decode to the new image", l.File.Offset)
+		}
+	}
+	return out, changes, nil
+}
+
+// replaceIn patches logos that all live directly in buf, which is either the image or the
+// decompressed contents of a container.
+func replaceIn(buf []byte, logos []*Logo, img []byte, guid GUID, opt ReplaceOptions) ([]Change, error) {
+	seen := map[int]bool{}
+	for _, l := range logos {
+		if seen[l.Volume.Offset] {
+			return nil, fmt.Errorf("volume at %#x contains more than one logo file; not supported", l.Volume.Offset)
+		}
+		seen[l.Volume.Offset] = true
+	}
+	var changes []Change
+	for _, l := range logos {
+		data, storage, err := l.rebuildData(img, opt)
+		if err != nil {
+			return nil, err
+		}
+		nf, err := BuildFile(l.File.GUID, l.File.Type, l.File.Attributes, data, l.Volume.EraseByte())
+		if err != nil {
+			return nil, err
+		}
+		before := bytes.Clone(buf)
+		pos, placement, err := placeFile(buf, l.Volume, l.File, nf)
+		if err != nil {
+			return nil, fmt.Errorf("volume at %#x: %w", l.Volume.Offset, err)
+		}
+		if err := verifyVolume(before, buf, l.Volume, guid); err != nil {
+			return nil, fmt.Errorf("verification of volume at %#x failed: %w", l.Volume.Offset, err)
+		}
+		if err := fixParents(before, buf, l.Volume); err != nil {
+			return nil, fmt.Errorf("volume at %#x: %w", l.Volume.Offset, err)
 		}
 		changes = append(changes, Change{
 			VolumeOffset: l.Volume.Offset, OldOffset: l.File.Offset, NewOffset: pos,
 			OldSize: l.File.Size, NewSize: len(nf), Placement: placement, Storage: storage,
 		})
 	}
-	return out, changes, nil
+	return changes, nil
 }
 
 // placeFile writes nf in place of old, in the cheapest way that keeps the volume valid:
@@ -337,9 +491,9 @@ func isErased(b []byte, erase byte) bool {
 	return true
 }
 
-// verifyVolume re-parses the patched volume and checks that it is consistent, that every
-// other file is untouched and that the logo decodes to img.
-func verifyVolume(before, after []byte, v *Volume, guid GUID, img []byte) error {
+// verifyVolume re-parses the patched volume and checks that it is consistent and that every
+// file except the replaced one (identified by guid) is untouched.
+func verifyVolume(before, after []byte, v *Volume, guid GUID) error {
 	if !bytes.Equal(before[:v.Offset], after[:v.Offset]) || !bytes.Equal(before[v.End():], after[v.End():]) {
 		return errors.New("bytes outside the volume changed")
 	}
@@ -378,17 +532,42 @@ func verifyVolume(before, after []byte, v *Volume, guid GUID, img []byte) error 
 	}
 	for i := range keptBefore {
 		if !bytes.Equal(keptBefore[i], keptAfter[i]) {
-			return errors.New("a non-logo file changed")
-		}
-	}
-	logos, err := FindLogos(after[:v.End()], guid)
-	if err != nil {
-		return err
-	}
-	for _, l := range logos {
-		if l.Volume.Offset == v.Offset && !bytes.Equal(l.Image, img) {
-			return errors.New("logo does not decode to the new image")
+			return errors.New("another file in the volume changed")
 		}
 	}
 	return nil
+}
+
+// fixParents updates the data checksums of the files that contain a nested volume (innermost
+// first, since an outer checksum covers the inner one) and checks that nothing else outside
+// the volume changed.
+func fixParents(before, after []byte, v *Volume) error {
+	allowed := map[int]bool{}
+	for i := len(v.Parents) - 1; i >= 0; i-- {
+		p := v.Parents[i]
+		if p.Attributes&ffsAttribChecksum != 0 {
+			after[p.Offset+17] = -sum8(after[p.DataOffset():p.End()])
+			allowed[p.Offset+17] = true
+		}
+	}
+	for i := range before {
+		if (i < v.Offset || i >= v.End()) && before[i] != after[i] && !allowed[i] {
+			return fmt.Errorf("unexpected change at %#x outside the volume", i)
+		}
+	}
+	for _, p := range v.Parents {
+		if !headerChecksumOK(after, p) || !dataChecksumOK(after, p) {
+			return fmt.Errorf("checksum of enclosing file at %#x is invalid", p.Offset)
+		}
+	}
+	return nil
+}
+
+// Header returns up to n bytes from the start of the logo file, read from the image or,
+// for a logo inside a compressed volume, from the decompressed data.
+func (l *Logo) Header(buf []byte, n int) []byte {
+	if l.Container != nil {
+		buf = l.Container.data
+	}
+	return bytes.Clone(buf[l.File.Offset:min(len(buf), l.File.Offset+n)])
 }

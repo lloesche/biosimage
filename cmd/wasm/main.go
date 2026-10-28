@@ -75,6 +75,13 @@ func inspectFirmware(args []js.Value) map[string]any {
 			"guid": l.File.GUID.String(), "fileOffset": l.File.Offset, "fileSize": l.File.Size,
 			"volumeOffset": l.Volume.Offset, "volumeLength": l.Volume.Length,
 			"encoding": l.Encoding.String(), "detail": l.Detail, "name": l.Name, "capacity": l.Capacity,
+			"header": bytesTo(l.Header(fw, 64)),
+		}
+		if c := l.Container; c != nil {
+			m["container"] = map[string]any{"guid": c.File.GUID.String(), "fileOffset": c.File.Offset, "fileSize": c.File.Size}
+		} else if n := len(l.Volume.Parents); n > 0 {
+			p := l.Volume.Parents[n-1]
+			m["parent"] = map[string]any{"guid": p.GUID.String(), "fileOffset": p.Offset}
 		}
 		if l.Image != nil {
 			m["image"] = bytesTo(l.Image)
@@ -113,6 +120,7 @@ func replaceLogo(args []js.Value) map[string]any {
 		list[i] = map[string]any{
 			"volumeOffset": c.VolumeOffset, "oldOffset": c.OldOffset, "newOffset": c.NewOffset,
 			"oldSize": c.OldSize, "newSize": c.NewSize, "placement": c.Placement, "storage": c.Storage,
+			"container": c.Container,
 		}
 	}
 	return map[string]any{"data": bytesTo(out), "changes": list}

@@ -284,6 +284,73 @@ func TestReplaceErasePolarityZero(t *testing.T) {
 	}
 }
 
+func TestReplaceNestedVolumeUpdatesParentChecksum(t *testing.T) {
+	// AMI layout: main volume -> RAW file (with data checksum) -> small volume -> logo file.
+	img := makeBMP(60, 40, true)
+	inner := buildVolume(t, 0x8000, 0xFF, lzmaLogoFile(t, makeBMP(8, 8, false), 0xFF))
+	raw, err := BuildFile(MustParseGUID("05CA020B-0FC1-11DC-9011-00173153EBA8"), FileTypeRaw, ffsAttribChecksum, inner, 0xFF)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fw := buildImage(buildVolume(t, 0x20000, 0xFF, otherFile(t, 20, 0xFF), raw))
+	out, _, err := ReplaceLogo(fw, img, LogoFileGUID, ReplaceOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := checkVolume(t, out, img)
+	if len(l.Volume.Parents) != 1 {
+		t.Fatalf("expected the logo in a nested volume, parents: %d", len(l.Volume.Parents))
+	}
+	p := l.Volume.Parents[0]
+	if !headerChecksumOK(out, p) || !dataChecksumOK(out, p) {
+		t.Fatal("enclosing RAW file checksum not updated")
+	}
+}
+
+func TestReplaceInsideCompressedVolume(t *testing.T) {
+	// MSI-on-Intel layout: main volume -> FV image file -> LZMA section -> volume -> logo file.
+	img := makeBMP(120, 80, true) // noisy, so the recompressed volume has to grow
+	inner := buildVolume(t, 0x10000, 0xFF, otherFile(t, 40, 0xFF), rawLogoFile(t, makeBMP(8, 8, false), 0xFF))
+	payload, err := lzmaCompress(NewSection(SectionFVImage, inner), lzmaParams{lzmaDefaultProps, lzmaDefaultDict})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fvFile, err := BuildFile(MustParseGUID("9E21FD93-9C72-4C15-8C4B-E77F1DB2D792"), FileTypeFVImage, ffsAttribChecksum,
+		newGuidedSection(LZMASectionGUID, guidedProcessingRequired, payload), 0xFF)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := otherFile(t, 30, 0xFF)
+	fw := buildImage(buildVolume(t, 0x40000, 0xFF, other, fvFile))
+	out, changes, err := ReplaceLogo(fw, img, LogoFileGUID, ReplaceOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(changes[0].Container, "recompressed") {
+		t.Fatalf("expected a container change, got %+v", changes[0])
+	}
+	logos, err := FindLogos(out, LogoFileGUID)
+	if err != nil || len(logos) != 1 || logos[0].Container == nil || !bytes.Equal(logos[0].Image, img) {
+		t.Fatalf("re-read failed: %v", err)
+	}
+	if !bytes.Contains(out, other) {
+		t.Fatal("other file in the main volume changed")
+	}
+	c := logos[0].Container
+	if !headerChecksumOK(out, c.File) || !dataChecksumOK(out, c.File) {
+		t.Fatal("checksum of the rebuilt FV image file is invalid")
+	}
+}
+
+func TestDetectEmbeddedSignature(t *testing.T) {
+	block := append(append(append([]byte{}, AMICapsuleGUID[:]...), make([]byte, 24)...), CertRSA2048GUID[:]...)
+	fw := append(buildImage(buildVolume(t, 0x2000, 0xFF, otherFile(t, 10, 0xFF))), block...)
+	c := DetectCapsule(fw)
+	if c == nil || !c.Signed || c.HeaderSize != 0 {
+		t.Fatalf("embedded signature not detected: %+v", c)
+	}
+}
+
 func TestReplaceTooBig(t *testing.T) {
 	fw := buildImage(buildVolume(t, 0x2000, 0xFF, rawLogoFile(t, makeBMP(8, 8, false), 0xFF)))
 	_, _, err := ReplaceLogo(fw, makeBMP(100, 100, true), LogoFileGUID, ReplaceOptions{})

@@ -213,7 +213,8 @@ type Capsule struct {
 	Signed     bool
 }
 
-// DetectCapsule recognises AMI Aptio and UEFI capsule headers.
+// DetectCapsule recognises AMI Aptio and UEFI capsule headers, and AMI signature blocks
+// embedded inside a flash image (used by e.g. Gigabyte and MSI instead of a capsule header).
 func DetectCapsule(buf []byte) *Capsule {
 	if len(buf) < 28 {
 		return nil
@@ -226,7 +227,7 @@ func DetectCapsule(buf []byte) *Capsule {
 		FMPCapsuleGUID: "UEFI FMP capsule",
 	}[g]
 	if !ok {
-		return nil
+		return detectEmbeddedSignature(buf)
 	}
 	hs := int(binary.LittleEndian.Uint32(buf[16:]))
 	if hs > len(buf) {
@@ -237,6 +238,22 @@ func DetectCapsule(buf []byte) *Capsule {
 		Kind:       kind,
 		HeaderSize: hs,
 		Signed:     bytes.Contains(hdr, CertRSA2048GUID[:]) || bytes.Contains(hdr, CertPKCS7GUID[:]),
+	}
+}
+
+// detectEmbeddedSignature looks for an AMI capsule header inside the image whose
+// certificate follows within its first bytes.
+func detectEmbeddedSignature(buf []byte) *Capsule {
+	for pos := 0; ; {
+		i := bytes.Index(buf[pos:], AMICapsuleGUID[:])
+		if i < 0 {
+			return nil
+		}
+		hdr := buf[pos+i : min(len(buf), pos+i+0x80)]
+		if bytes.Contains(hdr, CertRSA2048GUID[:]) || bytes.Contains(hdr, CertPKCS7GUID[:]) {
+			return &Capsule{Kind: "AMI signature embedded in the image", Signed: true}
+		}
+		pos += i + 1
 	}
 }
 

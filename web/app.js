@@ -257,22 +257,22 @@ window.addEventListener('drop', (e) => e.preventDefault());
 
 // ---------- hex view ----------
 
-// hexView renders HEX_BYTES bytes of buf at offset: file GUID, file header fields and
-// the first section header are highlighted.
-function hexView(container, title, buf, offset) {
+// hexView renders the first bytes of a logo file (bytes), labelled with offsets starting at
+// base: file GUID, file header fields and the first section header are highlighted.
+function hexView(container, title, bytes, base) {
   const cls = (i) => (i < 16 ? 'g' : i < 24 ? 'h' : i < 48 ? 's' : '');
   const pre = el('pre');
-  const end = Math.min(buf.length, offset + HEX_BYTES);
-  for (let row = offset; row < end; row += 16) {
-    pre.append(el('span', { className: 'off', textContent: row.toString(16).toUpperCase().padStart(8, '0') }), '  ');
+  const end = Math.min(bytes.length, HEX_BYTES);
+  for (let row = 0; row < end; row += 16) {
+    pre.append(el('span', { className: 'off', textContent: (base + row).toString(16).toUpperCase().padStart(8, '0') }), '  ');
     let ascii = '';
     for (let i = row; i < row + 16; i++) {
       if (i >= end) {
         pre.append('   ');
         continue;
       }
-      const b = buf[i];
-      pre.append(el('span', { className: cls(i - offset), textContent: b.toString(16).toUpperCase().padStart(2, '0') }),
+      const b = bytes[i];
+      pre.append(el('span', { className: cls(i), textContent: b.toString(16).toUpperCase().padStart(2, '0') }),
         i === row + 7 ? '  ' : ' ');
       ascii += b >= 0x20 && b < 0x7f ? String.fromCharCode(b) : '.';
     }
@@ -337,11 +337,14 @@ function renderFirmware(file) {
   const cap = info.capsule;
   const facts = [
     ['File', `${file.name} · ${fmtNum(file.size)} bytes`],
-    ['Format', cap ? `${cap.kind} · ${hex8(cap.headerSize).replace(/^0x0+/, '0x')} header` : 'Flash image'],
+    ['Format', !cap ? 'Flash image' : cap.headerSize ? `${cap.kind} · ${hex8(cap.headerSize).replace(/^0x0+/, '0x')} header` : `Flash image · ${cap.kind}`],
     ['Signature', cap ? (cap.signed ? 'Signed' : 'None') : 'None'],
     ['Volumes', `${info.volumes} firmware volumes`],
     ['Logo File', logo.guid],
-    ['Location', `${hex8(logo.fileOffset)} · FV ${hex8(logo.volumeOffset)}, ${fmtBytes(logo.volumeLength)}`],
+    ['Location', logo.container
+      ? `${hex8(logo.fileOffset)} in compressed volume (file ${logo.container.guid.slice(0, 8)} @ ${hex8(logo.container.fileOffset)})`
+      : `${hex8(logo.fileOffset)} · FV ${hex8(logo.volumeOffset)}, ${fmtBytes(logo.volumeLength)}` +
+        (logo.parent ? ` in file ${logo.parent.guid.slice(0, 8)}` : '')],
     ['Stored As', `${storageText(logo)} · ${fmtNum(logo.fileSize)} bytes`],
   ];
   if (logo.imageInfo) {
@@ -349,6 +352,10 @@ function renderFirmware(file) {
     facts.push(['Current Logo', `${i.format} ${i.width}×${i.height} · ${i.detail}`]);
   }
   facts.push(['Capacity', `${fmtNum(logo.capacity)} bytes`]);
+  if (logo.container) {
+    facts.push(['Note', `The logo is inside the compressed main volume (${fmtBytes(logo.container.fileSize)}); ` +
+      'patching recompresses it and takes a few seconds.']);
+  }
   if (info.logos.length > 1) facts.push(['Copies', `${info.logos.length} (all will be replaced)`]);
 
   $('fw-facts').replaceChildren(...facts.flatMap(([k, v]) => [el('dt', { textContent: k }), el('dd', { textContent: v })]));
@@ -362,7 +369,8 @@ function renderFirmware(file) {
     img.hidden = true;
     $('fw-logo-caption').textContent = 'The current logo cannot be previewed.';
   }
-  hexView($('fw-hex'), `Hex View – logo file @ ${hex8(logo.fileOffset)}`, state.fw, logo.fileOffset);
+  hexView($('fw-hex'), `Hex View – logo file @ ${hex8(logo.fileOffset)}${logo.container ? ' (decompressed)' : ''}`,
+    logo.header, logo.fileOffset);
   $('fw-info').hidden = false;
 }
 
@@ -575,11 +583,12 @@ function showResult(res, check) {
   $('usage-bar').style.width = `${Math.min(100, (c.newSize / capacity) * 100).toFixed(1)}%`;
   $('usage-size').textContent = `${fmtNum(c.newSize)} / ${fmtNum(capacity)} bytes`;
   $('usage-text').textContent = `${hex8(c.newOffset)} · ${c.storage}, ${c.placement}` +
-    (res.changes.length > 1 ? ` · ${res.changes.length} copies` : '');
+    (res.changes.length > 1 ? ` · ${res.changes.length} copies` : '') + (c.container ? ` · ${c.container}` : '');
 
   const back = check.logos[0];
   $('readback').src = objectURL('readback', back.image, MIME[back.imageInfo?.format] || 'image/bmp');
-  hexView($('new-hex'), `Hex View – new logo file @ ${hex8(back.fileOffset)}`, res.data, back.fileOffset);
+  hexView($('new-hex'), `Hex View – new logo file @ ${hex8(back.fileOffset)}${back.container ? ' (decompressed)' : ''}`,
+    back.header, back.fileOffset);
 
   const a = $('download');
   const name = outputName(state.fwName);
@@ -598,8 +607,10 @@ function renderFlashHelp() {
   const cap = state.fwInfo.capsule;
   const asus = cap?.kind === 'AMI Aptio capsule' && /\.cap$/i.test(state.fwName);
   const intro = cap?.signed
-    ? 'The original file is a signed capsule. The patched copy will not pass the signature check of the BIOS\'s ' +
-      'built-in updater (e.g. ASUS EZ Flash). Use a method that skips verification.'
+    ? 'The original file is signed. The patched copy will not pass the signature check of the BIOS\'s built-in ' +
+      'updater (ASUS EZ Flash, MSI M-Flash, Gigabyte Q-Flash, ASRock Instant Flash). Use a method that skips ' +
+      'verification, such as ASUS USB BIOS FlashBack, MSI Flash BIOS Button or Gigabyte Q-Flash Plus, and check ' +
+      'your board manual for how to use it.'
     : 'Flash the file with your usual method and keep the original at hand.';
   const box = $('flash-help');
   box.replaceChildren(el('p', { textContent: intro }));

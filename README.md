@@ -72,59 +72,70 @@ magick logo.png -background black -alpha remove -alpha off -resize 300x300 \
        -gravity center -extent 672x378 -type TrueColor BMP3:mylogo.bmp
 ```
 
-Size limit: the logo lives in a small firmware volume (256 KiB on the ASUS board above) and the
-stored, compressed file must fit. Flat-colour logos compress to a few dozen KiB; photos may not
+Size limit: the logo lives in a small firmware volume (128–320 KiB on the tested boards) and the
+stored, compressed file must fit (`biosimage info` shows the capacity). Flat-colour logos compress to a few dozen KiB; photos may not
 fit.
 
 ## Flashing
 
-Vendor BIOS files are usually **signed capsules**. Changing the logo invalidates the
-signature, so the BIOS's own updater (ASUS EZ Flash, MSI M-Flash, ...) will reject the file.
-You need a flashing method that does not verify the signature:
+Vendor BIOS files are **signed**, either as a capsule (ASUS `.CAP`) or with an AMI signature
+block embedded in the image (MSI, Gigabyte, ASRock). Changing the logo invalidates the
+signature, so the BIOS's own updater (ASUS EZ Flash, MSI M-Flash, Gigabyte Q-Flash, ASRock
+Instant Flash) will reject the file. You need a flashing method that does not verify it:
 
 - **ASUS:** USB BIOS FlashBack. Rename the file with the `BIOSRenamer.exe` that comes with the
   BIOS download (do this on a USB stick that contains only the modified `.CAP`, so the
   renamer cannot pick up the original), plug the stick into the FlashBack port and press the
   button.
-- Other vendors: check whether a "flashback"-style recovery or an SPI programmer is available.
+- **MSI:** Flash BIOS Button; **Gigabyte:** Q-Flash Plus; **ASRock:** BIOS Flashback, on boards
+  that have it. Each needs the file renamed as described in the board manual.
+- Otherwise an SPI programmer.
 
-FlashBack writes the whole chip, so expect your BIOS settings to be reset.
+These methods write the whole chip, so expect your BIOS settings to be reset. Only ASUS has
+been flashed and confirmed so far; the other vendors are verified on the file level only.
 
 ## How it works
 
-1. Find all top-level firmware volumes (`_FVH` headers with a valid checksum).
+1. Find all firmware volumes (`_FVH` headers with a valid checksum), including uncompressed
+   volumes nested inside files. AMI keeps the logo of MSI, Gigabyte and ASRock boards in a
+   small volume wrapped in a RAW file inside the main volume.
 2. Find the FFS file `7BB28B99-61BB-11D5-9A5D-0090273FC14D` (`gEfiDefaultBmpLogoGuid`), which
    EDK2 and AMI use for the boot logo, and decode it. Supported layouts: a raw file, an
    uncompressed `EFI_SECTION_RAW`, or a raw section inside an LZMA GUID-defined section
    (`EE4E5898-3914-4259-9D6E-DC7BD79403CF`). Other encapsulations (Tiano compression, Brotli)
    are replaced with an uncompressed section.
-3. Rebuild the file with the new image, keeping the other sections (e.g. the name) and the
+3. If there is no such file in an uncompressed volume, decompress LZMA-compressed volumes and
+   look there (MSI on Intel keeps the logo only in its compressed main volume).
+4. Rebuild the file with the new image, keeping the other sections (e.g. the name) and the
    original LZMA properties. The LZMA stream is written in the same form as EDK2's
    `LzmaCompress`: explicit size, no end-of-stream marker.
-4. Put it back into the volume: in place if it is the last file or still fits its slot
+5. Put it back into the volume: in place if it is the last file or still fits its slot
    (remainder filled with a pad file), otherwise the old slot becomes a pad file and the new
-   file is appended to the free space.
-5. Re-parse the volume and verify all file checksums, that all other files are byte-identical,
-   that nothing outside the volume changed and that the logo decodes to the new image.
+   file is appended to the free space. A compressed volume is recompressed and placed back
+   the same way, and the data checksums of enclosing files are updated.
+6. Verify: all file checksums are valid, all other files are byte-identical, nothing else
+   changed, and a fresh parse of the whole patched image finds every logo with the new image.
 
-Not supported (yet): logos inside compressed firmware volumes, which is how MSI, Gigabyte and
-ASRock store them, Intel Boot Guard-protected regions, and more than one logo file per volume.
+Limitations: biosimage's LZMA encoder compresses about 10 % worse than the vendors' tools, so a
+recompressed main volume grows (MSI PRO Z790-A: 5.5 MB → 6.2 MB); it must still fit into the
+free space of its volume. Not supported: Intel Boot Guard-protected regions and more than one
+logo file per volume.
 
 ## Tested with
 
 These images are tested weekly by the [vendor firmware workflow](.github/workflows/firmware.yml),
 which downloads them from the vendors' servers (see [`testdata/firmware.json`](testdata/firmware.json)).
 
-| Vendor | Board | Platform | BIOS | Result |
-|---|---|---|---|---|
-| ASUS | TUF GAMING B850I WIFI NEO | AM5 | 1804 | ✅ works, flashed via USB BIOS FlashBack |
-| ASUS | TUF GAMING B550-PLUS | AM4 | 3645 | ✅ patches both logo copies (not flashed) |
-| ASUS | PRIME Z790-P | Intel LGA1700 | 1836 | ✅ patches (not flashed) |
-| MSI | MAG B650 TOMAHAWK WIFI | AM5 | 7D75v1R3 | ❌ logo inside a compressed volume |
-| MSI | PRO Z790-A WIFI | Intel LGA1700 | 7E07vAJ | ❌ no standard logo file found |
-| Gigabyte | B550 AORUS ELITE V2 | AM4 | F20c | ❌ logo inside a compressed volume |
-| Gigabyte | Z790 AORUS ELITE AX | Intel LGA1700 | FP | ❌ logo inside a compressed volume |
-| ASRock | B650M Pro RS | AM5 | 4.60 | ❌ logo inside a compressed volume |
+| Vendor | Board | Platform | BIOS | Logo | Result |
+|---|---|---|---|---|---|
+| ASUS | TUF GAMING B850I WIFI NEO | AM5 | 1804 | logo volume | ✅ patched and flashed via USB BIOS FlashBack |
+| ASUS | TUF GAMING B550-PLUS | AM4 | 3645 | logo volume, 2 copies | ✅ patched (not flashed) |
+| ASUS | PRIME Z790-P | Intel LGA1700 | 1836 | logo volume | ✅ patched (not flashed) |
+| MSI | MAG B650 TOMAHAWK WIFI | AM5 | 7D75v1R3 | nested volume | ✅ patched (not flashed) |
+| MSI | PRO Z790-A WIFI | Intel LGA1700 | 7E07vAJ | compressed main volume | ✅ patched (not flashed) |
+| Gigabyte | B550 AORUS ELITE V2 | AM4 | F20c | nested volume, 2 copies | ✅ patched (not flashed) |
+| Gigabyte | Z790 AORUS ELITE AX | Intel LGA1700 | FP | nested volume | ✅ patched (not flashed) |
+| ASRock | B650M Pro RS | AM5 | 4.60 | nested volume | ✅ patched (not flashed) |
 
 Reports for other boards are welcome; please include the output of `biosimage info`.
 

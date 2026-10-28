@@ -117,7 +117,11 @@ func cmdInfo(w io.Writer, args []string) error {
 		if c.Signed {
 			signed = "signed - a modified file will fail signature checks"
 		}
-		fmt.Fprintf(w, "Capsule:  %s, %#x-byte header, %s\n", c.Kind, c.HeaderSize, signed)
+		if c.HeaderSize > 0 {
+			fmt.Fprintf(w, "Capsule:  %s, %#x-byte header, %s\n", c.Kind, c.HeaderSize, signed)
+		} else {
+			fmt.Fprintf(w, "Signature: %s, %s\n", c.Kind, signed)
+		}
 	}
 	fmt.Fprintf(w, "Volumes:  %d top-level firmware volume(s)\n", len(uefi.FindVolumes(buf)))
 	logos, err := uefi.FindLogos(buf, guid)
@@ -127,6 +131,13 @@ func cmdInfo(w io.Writer, args []string) error {
 	for i, l := range logos {
 		fmt.Fprintf(w, "\nLogo %d:   file %s at %#x (%d bytes) in volume at %#x (%d KiB)\n",
 			i+1, l.File.GUID, l.File.Offset, l.File.Size, l.Volume.Offset, l.Volume.Length>>10)
+		if c := l.Container; c != nil {
+			fmt.Fprintf(w, "  Inside:   LZMA-compressed volume in file %s at %#x (%d bytes); offsets above are within it\n",
+				c.File.GUID, c.File.Offset, c.File.Size)
+		} else if n := len(l.Volume.Parents); n > 0 {
+			p := l.Volume.Parents[n-1]
+			fmt.Fprintf(w, "  Inside:   file %s at %#x\n", p.GUID, p.Offset)
+		}
 		enc := l.Encoding.String()
 		if l.Detail != "" {
 			enc += ": " + l.Detail
@@ -243,15 +254,19 @@ func cmdReplace(w io.Writer, args []string) error {
 	for _, c := range changes {
 		fmt.Fprintf(w, "Logo:   volume %#x: file at %#x, %d -> %d bytes, %s, %s\n",
 			c.VolumeOffset, c.NewOffset, c.OldSize, c.NewSize, c.Storage, c.Placement)
+		if c.Container != "" {
+			fmt.Fprintf(w, "        %s\n", c.Container)
+		}
 	}
 	if err := os.WriteFile(dst, patched, 0o644); err != nil {
 		return err
 	}
 	fmt.Fprintf(w, "wrote %s (verified)\n", dst)
 	if c := uefi.DetectCapsule(buf); c != nil && c.Signed {
-		fmt.Fprintln(w, "\nnote: the input is a signed capsule. The modified file no longer matches its signature,")
-		fmt.Fprintln(w, "so the BIOS's built-in updater (e.g. ASUS EZ Flash) will reject it. Flash it with a")
-		fmt.Fprintln(w, "method that skips verification, such as ASUS USB BIOS FlashBack.")
+		fmt.Fprintln(w, "\nnote: the input is signed. The modified file no longer matches its signature, so the")
+		fmt.Fprintln(w, "BIOS's built-in updater (ASUS EZ Flash, MSI M-Flash, Gigabyte Q-Flash, ...) will reject it.")
+		fmt.Fprintln(w, "Flash it with a method that skips verification, such as ASUS USB BIOS FlashBack, MSI")
+		fmt.Fprintln(w, "Flash BIOS Button or Gigabyte Q-Flash Plus.")
 	}
 	return nil
 }

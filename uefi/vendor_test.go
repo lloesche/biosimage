@@ -34,6 +34,7 @@ type vendorFirmware struct {
 		Encoding    string `json:"encoding"`
 		Image       string `json:"image"`
 		Capacity    int    `json:"capacity"`
+		Compressed  bool   `json:"inCompressedVolume"`
 		Unsupported string `json:"unsupported"`
 	} `json:"expect"`
 }
@@ -99,6 +100,9 @@ func checkVendorFirmware(t *testing.T, e vendorFirmware, fw []byte) {
 	if got := l.Encoding.String(); got != e.Expect.Encoding {
 		t.Errorf("encoding %q, want %q", got, e.Expect.Encoding)
 	}
+	if (l.Container != nil) != e.Expect.Compressed {
+		t.Errorf("inside compressed volume = %v, want %v", l.Container != nil, e.Expect.Compressed)
+	}
 	if l.Capacity != e.Expect.Capacity {
 		t.Errorf("capacity %d, want %d", l.Capacity, e.Expect.Capacity)
 	}
@@ -125,7 +129,7 @@ func checkVendorFirmware(t *testing.T, e vendorFirmware, fw []byte) {
 		}
 	}
 	for _, c := range changes {
-		t.Logf("replaced: volume %#x, file %#x, %d -> %d bytes, %s", c.VolumeOffset, c.NewOffset, c.OldSize, c.NewSize, c.Placement)
+		t.Logf("replaced: volume %#x, file %#x, %d -> %d bytes, %s %s", c.VolumeOffset, c.NewOffset, c.OldSize, c.NewSize, c.Placement, c.Container)
 	}
 }
 

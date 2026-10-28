@@ -58,7 +58,14 @@
     "url": "https://download.msi.com/bos_exe/mb/7D75v1R3.zip",
     "sha256": "5a7a6733e3b45e897ad3e2ecc3d862d954521e14b4365c86e0f8338647c88ef4",
     "file": "E7D75AMS.1R3",
-    "expect": { "unsupported": "inside a compressed volume" }
+    "expect": {
+      "signed": true,
+      "logos": 1,
+      "fileOffset": 16777480,
+      "encoding": "LZMA-compressed section",
+      "image": "BMP 409x307",
+      "capacity": 327560
+    }
   },
   {
     "vendor": "MSI",
@@ -68,7 +75,15 @@
     "url": "https://download.msi.com/bos_exe/mb/7E07vAJ.zip",
     "sha256": "de0b91cd71b7643c16864b1cd94c5ddc90e91a9a4446f8d3431a0ca6d1852e87",
     "file": "E7E07IMS.AJ0",
-    "expect": { "unsupported": "logo file not found" }
+    "expect": {
+      "signed": true,
+      "logos": 1,
+      "fileOffset": 16609464,
+      "encoding": "LZMA-compressed section",
+      "image": "BMP 409x307",
+      "capacity": 40712,
+      "inCompressedVolume": true
+    }
   },
   {
     "vendor": "Gigabyte",
@@ -78,7 +93,14 @@
     "url": "https://download.gigabyte.com/FileList/BIOS/mb_bios_b550-aorus-elite-v2_8arnr204_f20c.zip",
     "sha256": "f367fdf16d9ca081e02ee2e7d68be2a6c5a7c0f3bc0d8e06c68379ccb7a60d62",
     "file": "B550AORUSELITEV2.F20c",
-    "expect": { "unsupported": "inside a compressed volume" }
+    "expect": {
+      "signed": true,
+      "logos": 2,
+      "fileOffset": 6291768,
+      "encoding": "LZMA-compressed section",
+      "image": "BMP 293x400",
+      "capacity": 130952
+    }
   },
   {
     "vendor": "Gigabyte",
@@ -88,7 +110,14 @@
     "url": "https://download.gigabyte.com/FileList/BIOS/mb_bios_z790-aorus-elite-ax_8arpt050_fp.zip",
     "sha256": "9d4329802f8447f0cc0107f3d493daea9d448f1c58d730dce7246291d6e40ee3",
     "file": "Z790AORUSELITEAX11.FP",
-    "expect": { "unsupported": "inside a compressed volume" }
+    "expect": {
+      "signed": true,
+      "logos": 1,
+      "fileOffset": 17375544,
+      "encoding": "LZMA-compressed section",
+      "image": "JPEG 496x533",
+      "capacity": 130952
+    }
   },
   {
     "vendor": "ASRock",
@@ -98,6 +127,13 @@
     "url": "https://download.asrock.com/BIOS/AM5/B650M%20Pro%20RS(4.60)ROM.zip",
     "sha256": "8af4103f61d1b2a0005de46e062cd33adbf74512f0c13b3a3c11b51a405e1652",
     "file": "B65MPRS4.60.ROM",
-    "expect": { "unsupported": "inside a compressed volume" }
+    "expect": {
+      "signed": true,
+      "logos": 1,
+      "fileOffset": 16777480,
+      "encoding": "LZMA-compressed section",
+      "image": "JPEG 424x208",
+      "capacity": 130952
+    }
   }
 ]

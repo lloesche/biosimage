@@ -20,7 +20,11 @@ There is also a command-line tool:
 ```console
 $ biosimage info A5766.CAP
 File:     A5766.CAP (33558528 bytes)
-Capsule:  AMI Aptio capsule, 0x1000-byte header, signed - a modified file will fail signature checks
+Capsule:  AMI Aptio capsule, 0x1000-byte header
+Signed:   YES (AMI Aptio capsule). A patched file can only be flashed with a method that skips
+          the signature check: USB BIOS FlashBack, Flash BIOS Button, Q-Flash Plus or an
+          SPI programmer. The BIOS's own updater (EZ Flash, M-Flash, Q-Flash, Instant Flash)
+          will reject it.
 Volumes:  5 top-level firmware volume(s)
 
 Logo 1:   file 7BB28B99-61BB-11D5-9A5D-0090273FC14D at 0x1b830a0 (4729 bytes) in volume at 0x1b81000 (256 KiB)

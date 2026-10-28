@@ -112,16 +112,17 @@ func cmdInfo(w io.Writer, args []string) error {
 		return err
 	}
 	fmt.Fprintf(w, "File:     %s (%d bytes)\n", pos[0], len(buf))
-	if c := uefi.DetectCapsule(buf); c != nil {
-		signed := "unsigned"
-		if c.Signed {
-			signed = "signed - a modified file will fail signature checks"
-		}
-		if c.HeaderSize > 0 {
-			fmt.Fprintf(w, "Capsule:  %s, %#x-byte header, %s\n", c.Kind, c.HeaderSize, signed)
-		} else {
-			fmt.Fprintf(w, "Signature: %s, %s\n", c.Kind, signed)
-		}
+	c := uefi.DetectCapsule(buf)
+	if c != nil && c.HeaderSize > 0 {
+		fmt.Fprintf(w, "Capsule:  %s, %#x-byte header\n", c.Kind, c.HeaderSize)
+	}
+	if c != nil && c.Signed {
+		fmt.Fprintf(w, "Signed:   YES (%s). A patched file can only be flashed with a method that skips\n", c.Kind)
+		fmt.Fprintln(w, "          the signature check: USB BIOS FlashBack, Flash BIOS Button, Q-Flash Plus or an")
+		fmt.Fprintln(w, "          SPI programmer. The BIOS's own updater (EZ Flash, M-Flash, Q-Flash, Instant Flash)")
+		fmt.Fprintln(w, "          will reject it.")
+	} else {
+		fmt.Fprintln(w, "Signed:   no signature detected; your usual BIOS update method should accept a patched file")
 	}
 	fmt.Fprintf(w, "Volumes:  %d top-level firmware volume(s)\n", len(uefi.FindVolumes(buf)))
 	logos, err := uefi.FindLogos(buf, guid)

@@ -345,7 +345,11 @@ function renderFirmware(file) {
   const facts = [
     ['File', `${file.name} · ${fmtNum(file.size)} bytes`],
     ['Format', !cap ? 'Flash image' : cap.headerSize ? `${cap.kind} · ${hex8(cap.headerSize).replace(/^0x0+/, '0x')} header` : `Flash image · ${cap.kind}`],
-    ['Signature', cap ? (cap.signed ? 'Signed' : 'None') : 'None'],
+    cap?.signed
+      ? ['Signature', 'SIGNED – a patched file can only be flashed with a method that skips the signature ' +
+        'check: USB BIOS FlashBack, Flash BIOS Button, Q-Flash Plus or an SPI programmer. The BIOS\'s own ' +
+        'updater (EZ Flash, M-Flash, Q-Flash, Instant Flash) will reject it.', 'alert']
+      : ['Signature', 'none detected – your usual BIOS update method should accept the patched file'],
     ['Volumes', `${info.volumes} firmware volumes`],
     ['Logo File', logo.guid],
     ['Location', logo.container
@@ -365,7 +369,7 @@ function renderFirmware(file) {
   }
   if (info.logos.length > 1) facts.push(['Copies', `${info.logos.length} (all will be replaced)`]);
 
-  $('fw-facts').replaceChildren(...facts.flatMap(([k, v]) => [el('dt', { textContent: k }), el('dd', { textContent: v })]));
+  $('fw-facts').replaceChildren(...facts.flatMap(([k, v, cls]) => [el('dt', { textContent: k }), el('dd', { textContent: v, className: cls || '' })]));
 
   const img = $('fw-logo');
   if (logo.image && logo.imageInfo) {

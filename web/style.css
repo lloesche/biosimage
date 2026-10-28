@@ -261,3 +261,6 @@ button.key:hover, button.key:focus-visible { background: var(--grey); color: var
   .nc-head span:nth-child(3), .nc-row span:nth-child(3) { display: none; }
   .nc-list { height: 14em; }
 }
+
+/* Facts that need attention, e.g. a signed BIOS that only FlashBack-style methods accept. */
+.rows dd.alert { color: var(--white); background: var(--red); padding: 0 6px; margin: 2px 0; }

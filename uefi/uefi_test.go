@@ -351,6 +351,59 @@ func TestDetectEmbeddedSignature(t *testing.T) {
 	}
 }
 
+func TestReplaceShiftsFollowingFiles(t *testing.T) {
+	// Not enough free space to move the grown logo to the end, but enough to grow it in place
+	// and shift the following file, which needs 16-byte data alignment (attribute 0x08).
+	old, img := makeBMP(40, 30, true), makeBMP(50, 40, true)
+	follower, err := BuildFile(MustParseGUID("FFCFC736-9DD8-4C63-ABDD-6DFB301799DF"), FileTypeFreeform, 0x08,
+		NewSection(SectionRaw, bytes.Repeat([]byte{0x42}, 1000)), 0xFF)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fw := buildImage(buildVolume(t, 0x2000, 0xFF, rawLogoFile(t, old, 0xFF), follower))
+	out, changes, err := ReplaceLogo(fw, img, LogoFileGUID, ReplaceOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := checkVolume(t, out, img)
+	if !strings.Contains(changes[0].Placement, "following files moved") {
+		t.Fatalf("unexpected placement %+v", changes[0])
+	}
+	files, _, _ := l.Volume.Files(out)
+	for _, f := range files {
+		if f.GUID == MustParseGUID("FFCFC736-9DD8-4C63-ABDD-6DFB301799DF") {
+			if (f.DataOffset()-l.Volume.Offset)%16 != 0 {
+				t.Fatalf("moved file data at %#x is not 16-byte aligned", f.DataOffset())
+			}
+			if !bytes.Equal(out[f.Offset:f.End()], follower) {
+				t.Fatal("moved file changed")
+			}
+			return
+		}
+	}
+	t.Fatal("following file lost")
+}
+
+func TestReplaceCompressesUncompressedLogoThatDoesNotFit(t *testing.T) {
+	// EVGA stores the logo uncompressed with little room; a larger (compressible) image is
+	// then wrapped in an LZMA section instead of failing.
+	img := makeBMP(100, 100, false) // ~30 KB raw, compresses well
+	fw := buildImage(buildVolume(t, 0x2000, 0xFF, rawLogoFile(t, makeBMP(8, 8, false), 0xFF)))
+	out, changes, err := ReplaceLogo(fw, img, LogoFileGUID, ReplaceOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if l := checkVolume(t, out, img); l.Encoding != EncodingLZMA {
+		t.Fatalf("encoding %v, want LZMA", l.Encoding)
+	}
+	if !strings.Contains(changes[0].Storage, "original was uncompressed") {
+		t.Fatalf("storage %q", changes[0].Storage)
+	}
+	if _, _, err := ReplaceLogo(fw, img, LogoFileGUID, ReplaceOptions{NoCompress: true}); err == nil {
+		t.Fatal("-no-compress must not fall back to compression")
+	}
+}
+
 func TestReplaceTooBig(t *testing.T) {
 	fw := buildImage(buildVolume(t, 0x2000, 0xFF, rawLogoFile(t, makeBMP(8, 8, false), 0xFF)))
 	_, _, err := ReplaceLogo(fw, makeBMP(100, 100, true), LogoFileGUID, ReplaceOptions{})

@@ -278,6 +278,21 @@ func (l *Logo) rebuildData(img []byte, opt ReplaceOptions) ([]byte, string, erro
 	}
 }
 
+// compressedFile rebuilds an uncompressed-section logo file with the image's raw section
+// wrapped in an LZMA GUID-defined section.
+func (l *Logo) compressedFile(img []byte) ([]byte, error) {
+	payload, err := lzmaCompress(NewSection(SectionRaw, img), lzmaParams{props: lzmaDefaultProps, dict: lzmaDefaultDict})
+	if err != nil {
+		return nil, err
+	}
+	parts := make([][]byte, len(l.top))
+	for i, s := range l.top {
+		parts[i] = s.Raw
+	}
+	parts[l.topIdx] = newGuidedSection(LZMASectionGUID, guidedProcessingRequired, payload)
+	return BuildFile(l.File.GUID, l.File.Type, l.File.Attributes, JoinSections(parts...), l.Volume.EraseByte())
+}
+
 // Change describes one patched logo file.
 type Change struct {
 	VolumeOffset int
@@ -393,6 +408,16 @@ func replaceIn(buf []byte, logos []*Logo, img []byte, guid GUID, opt ReplaceOpti
 		}
 		before := bytes.Clone(buf)
 		pos, placement, err := placeFile(buf, l.Volume, l.File, nf)
+		if errors.Is(err, errTooBig) && l.Encoding == EncodingRawSection && !opt.NoCompress {
+			// The original was stored uncompressed and the new image does not fit that way.
+			// The firmware reads the raw section through any encapsulation, so wrap it in LZMA.
+			copy(buf, before)
+			if nf, err = l.compressedFile(img); err != nil {
+				return nil, err
+			}
+			pos, placement, err = placeFile(buf, l.Volume, l.File, nf)
+			storage = "stored LZMA-compressed (the original was uncompressed but the new image did not fit)"
+		}
 		if err != nil {
 			return nil, fmt.Errorf("volume at %#x: %w", l.Volume.Offset, err)
 		}
@@ -465,7 +490,10 @@ func placeFile(buf []byte, v *Volume, old File, nf []byte) (int, string, error) 
 		pos += 8
 	}
 	if pos+len(nf) > v.End() {
-		return 0, "", tooBig(len(nf), v.End()-used)
+		if ok := shiftFollowing(buf, v, files, idx, nf); ok {
+			return old.Offset, "rewritten in place, following files moved", nil
+		}
+		return 0, "", tooBig(len(nf), max(v.End()-used, slotEnd-old.Offset+v.End()-used))
 	}
 	if !isErased(buf[used:min(v.alignUp(pos+len(nf)), v.End())], erase) {
 		return 0, "", errors.New("free space at the end of the volume is not empty")
@@ -478,8 +506,67 @@ func placeFile(buf []byte, v *Volume, old File, nf []byte) (int, string, error) 
 	return pos, "moved to end of volume, old slot padded", nil
 }
 
+// shiftFollowing writes nf at the position of files[idx] and moves the files after it towards
+// the end of the volume, keeping each file's data alignment (with pad files where needed) and
+// dropping the old pad files. It refuses, leaving buf untouched, if a following file is fixed
+// in place or if the result does not fit.
+func shiftFollowing(buf []byte, v *Volume, files []File, idx int, nf []byte) bool {
+	type move struct {
+		data []byte
+		pos  int
+	}
+	var moves []move
+	var pads [][2]int // pos, size
+	pos := v.alignUp(files[idx].Offset + len(nf))
+	for _, f := range files[idx+1:] {
+		if f.Type == FileTypePad {
+			continue
+		}
+		if f.Attributes&ffsAttribFixed != 0 {
+			return false
+		}
+		at := alignedFilePos(v, pos, f.HeaderSize, max(dataAlignment(f.Attributes), 8))
+		if at > pos {
+			pads = append(pads, [2]int{pos, at - pos})
+		}
+		moves = append(moves, move{bytes.Clone(buf[f.Offset:f.End()]), at})
+		pos = v.alignUp(at + f.Size)
+	}
+	if pos > v.End() || files[idx].Offset+len(nf) > v.End() {
+		return false
+	}
+	_, used, err := v.Files(buf)
+	if err != nil || !isErased(buf[used:v.End()], v.EraseByte()) {
+		return false
+	}
+	for i := files[idx].Offset; i < used; i++ {
+		buf[i] = v.EraseByte()
+	}
+	copy(buf[files[idx].Offset:], nf)
+	for _, p := range pads {
+		copy(buf[p[0]:], buildPadFile(p[1], v.EraseByte()))
+	}
+	for _, m := range moves {
+		copy(buf[m.pos:], m.data)
+	}
+	return true
+}
+
+// alignedFilePos returns the first position at or after pos where a file with the given
+// header size has its data aligned, leaving either no gap or one large enough for a pad file.
+func alignedFilePos(v *Volume, pos, headerSize, align int) int {
+	at := pos
+	for (at+headerSize-v.Offset)%align != 0 || (at != pos && at-pos < ffsHeaderSize) {
+		at += 8
+	}
+	return at
+}
+
+// errTooBig reports that a rebuilt file does not fit into its volume.
+var errTooBig = errors.New("not enough space in the volume")
+
 func tooBig(need, have int) error {
-	return fmt.Errorf("new logo file needs %d bytes but only %d are available in its volume; use a smaller or simpler image", need, have)
+	return fmt.Errorf("%w: new logo file needs %d bytes but only %d are available; use a smaller or simpler image", errTooBig, need, have)
 }
 
 func isErased(b []byte, erase byte) bool {

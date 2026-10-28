@@ -4,13 +4,16 @@ name: Vendor firmware
 # downloaded from the vendors' servers, verified by SHA-256 and kept only in the Actions
 # cache. They are never uploaded as artifacts or committed: vendor firmware is not ours to
 # redistribute.
+#
+# Runs only when the parsing code or the manifest changes; the files themselves are pinned
+# by hash, so there is nothing new to learn from running on a schedule.
 on:
-  schedule:
-    - cron: "17 4 * * 1" # weekly, Monday morning
   workflow_dispatch:
   push:
     branches: [main]
-    paths: ["testdata/firmware.json"]
+    paths: ["uefi/**", "go.mod", "go.sum", "testdata/firmware.json", ".github/workflows/firmware.yml"]
+  pull_request:
+    paths: ["uefi/**", "go.mod", "go.sum", "testdata/firmware.json", ".github/workflows/firmware.yml"]
 
 permissions:
   contents: read
@@ -31,4 +34,4 @@ jobs:
           key: vendor-firmware-${{ hashFiles('testdata/firmware.json') }}
           restore-keys: vendor-firmware-
       - name: Test against vendor firmware
-        run: go test ./uefi -run TestVendorFirmware -v
+        run: go test ./uefi -run TestVendorFirmware -v -timeout 30m

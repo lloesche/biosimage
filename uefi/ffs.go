@@ -17,6 +17,7 @@ const (
 const (
 	ffsAttribLargeFile      = 0x01
 	ffsAttribDataAlignment2 = 0x02
+	ffsAttribFixed          = 0x04
 	ffsAttribChecksum       = 0x40
 
 	ffsHeaderSize      = 24

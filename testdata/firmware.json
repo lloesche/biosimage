@@ -51,6 +51,40 @@
     }
   },
   {
+    "board": "PRIME Z890-P",
+    "expect": {
+      "capacity": 356728,
+      "encoding": "LZMA-compressed section",
+      "fileOffset": 1482376,
+      "image": "BMP 672x378",
+      "logos": 1,
+      "signed": true
+    },
+    "file": "PRIME-Z890-P-ASUS-3212.CAP",
+    "platform": "Intel LGA1851",
+    "sha256": "70e42f5f6f2a52daa221f4beddaeedf9992c7277b83226b696c251fee222b14d",
+    "url": "https://dlcdnets.asus.com/pub/ASUS/mb/BIOS/PRIME-Z890-P-ASUS-3212.ZIP",
+    "vendor": "ASUS",
+    "version": "3212"
+  },
+  {
+    "board": "NUC 14 Pro (NUC14RV)",
+    "expect": {
+      "capacity": 262024,
+      "encoding": "LZMA-compressed section",
+      "fileOffset": 468747,
+      "image": "BMP 448x142",
+      "logos": 1,
+      "signed": true
+    },
+    "file": "RVRPLR30.0044.CAP",
+    "platform": "Intel Core Ultra (Meteor Lake)",
+    "sha256": "cd55dfe1144b074abd950410a190471931a2bb78a8174f4d2a63a24c03a7f954",
+    "url": "https://dlcdnets.asus.com/pub/ASUS/NUC/NUC_14_Pro_Kit/RVRPLR30.0044.zip",
+    "vendor": "ASUS",
+    "version": "0044"
+  },
+  {
     "vendor": "MSI",
     "board": "MAG B650 TOMAHAWK WIFI",
     "platform": "AM5",
@@ -84,6 +118,60 @@
       "capacity": 40712,
       "inCompressedVolume": true
     }
+  },
+  {
+    "board": "MAG Z890 TOMAHAWK WIFI",
+    "expect": {
+      "capacity": 29776,
+      "encoding": "LZMA-compressed section",
+      "fileOffset": 27751616,
+      "image": "BMP 409x307",
+      "inCompressedVolume": true,
+      "logos": 1,
+      "signed": true
+    },
+    "file": "E7E32IMSI.1AD0",
+    "platform": "Intel LGA1851",
+    "sha256": "3fd8aa68a75ed8d59462488474cd2b9727635af6c2fb7ceec6664183c1fda0c9",
+    "url": "https://download.msi.com/bos_exe/mb/7E32v1AD.zip",
+    "vendor": "MSI",
+    "version": "7E32v1AD"
+  },
+  {
+    "board": "B450 TOMAHAWK MAX",
+    "expect": {
+      "capacity": 79064,
+      "encoding": "LZMA-compressed section",
+      "fileOffset": 10875272,
+      "image": "JPEG 409x307",
+      "inCompressedVolume": true,
+      "logos": 2,
+      "signed": false
+    },
+    "file": "E7C02AMS.3M5",
+    "platform": "AM4",
+    "sha256": "88742c2b2c90242d4e90f1113a1f81d5c437332fb2c965e3656098ce08dc6c34",
+    "url": "https://download.msi.com/bos_exe/mb/7C02v3M5.zip",
+    "vendor": "MSI",
+    "version": "7C02v3M5"
+  },
+  {
+    "board": "MPG Z490 GAMING EDGE WIFI",
+    "expect": {
+      "capacity": 195544,
+      "encoding": "LZMA-compressed section",
+      "fileOffset": 15196936,
+      "image": "BMP 409x307",
+      "inCompressedVolume": true,
+      "logos": 1,
+      "signed": false
+    },
+    "file": "E7C79IMS.1F1",
+    "platform": "Intel LGA1200",
+    "sha256": "87efad33ab978f72bcf205d37218e320241d0659363a77132f895d6164b5e4f7",
+    "url": "https://download.msi.com/bos_exe/mb/7C79v1F1.zip",
+    "vendor": "MSI",
+    "version": "7C79v1F1"
   },
   {
     "vendor": "Gigabyte",
@@ -120,6 +208,40 @@
     }
   },
   {
+    "board": "X870 AORUS ELITE WIFI7",
+    "expect": {
+      "capacity": 130952,
+      "encoding": "LZMA-compressed section",
+      "fileOffset": 16777880,
+      "image": "BMP 293x400",
+      "logos": 1,
+      "signed": true
+    },
+    "file": "X870AELITEWIFI7.F13g",
+    "platform": "AM5",
+    "sha256": "9045b08f62c60a2b1935da95da9e951dabe2bf14c39f33e5c8b1d1244a005ab1",
+    "url": "https://download.gigabyte.com/FileList/BIOS/mb_bios_x870-a-elite-wifi7_8arpl303_f13g.zip",
+    "vendor": "Gigabyte",
+    "version": "F13g"
+  },
+  {
+    "board": "Z490 AORUS ELITE",
+    "expect": {
+      "capacity": 130952,
+      "encoding": "LZMA-compressed section",
+      "fileOffset": 20553848,
+      "image": "JPEG 496x533",
+      "logos": 1,
+      "signed": true
+    },
+    "file": "Z490AORUSELITE.F25a",
+    "platform": "Intel LGA1200",
+    "sha256": "bdacc929af8e4ad25846b03ac7560f0f7a8c5487e033c8dbdc5afc44e2f9f332",
+    "url": "https://download.gigabyte.com/FileList/BIOS/mb_bios_z490-aorus-elite_8acml007_f25a.zip",
+    "vendor": "Gigabyte",
+    "version": "F25a"
+  },
+  {
     "vendor": "ASRock",
     "board": "B650M Pro RS",
     "platform": "AM5",
@@ -135,5 +257,92 @@
       "image": "JPEG 424x208",
       "capacity": 130952
     }
+  },
+  {
+    "board": "Z790 Pro RS",
+    "expect": {
+      "capacity": 130952,
+      "encoding": "LZMA-compressed section",
+      "fileOffset": 4657464,
+      "image": "JPEG 424x208",
+      "logos": 1,
+      "signed": true
+    },
+    "file": "Z790-Pro-RS_19.03.ROM",
+    "platform": "Intel LGA1700",
+    "sha256": "13633d6c94345a256e89c5bcd68fd05bc5e2aa6cbc49cedc77d8d0a8700ce0a4",
+    "url": "https://download.asrock.com/BIOS/1700/Z790%20Pro%20RS(19.03)ROM.zip",
+    "vendor": "ASRock",
+    "version": "19.03"
+  },
+  {
+    "board": "B650M-SILVER",
+    "expect": {
+      "capacity": 395632,
+      "encoding": "LZMA-compressed section",
+      "fileOffset": 22417520,
+      "image": "JPEG 1024x768",
+      "inCompressedVolume": true,
+      "logos": 1,
+      "signed": false
+    },
+    "file": "B65BQ730.BST",
+    "platform": "AM5",
+    "sha256": "6f44420048e6aa71d79b4b1b1731a097f52cf1d852f3714c4ad0ca4ec2c08c7c",
+    "url": "https://www.biostar.com.tw/upload/Bios/B65BQ730BST.zip",
+    "vendor": "Biostar",
+    "version": "B65BQ730"
+  },
+  {
+    "board": "NITRO+ B850A WIFI 7",
+    "expect": {
+      "capacity": 130952,
+      "encoding": "LZMA-compressed section",
+      "fileOffset": 16777480,
+      "image": "JPEG 1440x360",
+      "logos": 1,
+      "signed": true
+    },
+    "file": "SAPPHIRE_NITRO_B850A_WIFI7_AM50N101R30.BIN",
+    "platform": "AM5",
+    "sha256": "dc246a43a786a2e0a5ba1d6f002faed8b66022785f3aa325654f41611a4052e8",
+    "url": "https://cdn.sapphiretech.global/assets/bios/AM50N101R30_JAM5AX03_SAPPHIRE_NITRO_B850A_WIFI7_PI1301B_20260804_112310.zip",
+    "vendor": "Sapphire",
+    "version": "AM50N101R30"
+  },
+  {
+    "board": "N7 Z890",
+    "expect": {
+      "capacity": 130952,
+      "encoding": "LZMA-compressed section",
+      "fileOffset": 17236232,
+      "image": "JPEG 1920x1080",
+      "logos": 1,
+      "signed": true
+    },
+    "file": "N7-Z89XT_3.13.ROM",
+    "platform": "Intel LGA1851",
+    "sha256": "1f8a026b170ca9b5a323380ff7c39b6a5f3ec215c24692d93aac6fb7b7f8dc43",
+    "url": "https://cdn-g.nzxt.com/dl/N7_Z89XT(3.13).ROM.zip",
+    "vendor": "NZXT",
+    "version": "3.13"
+  },
+  {
+    "board": "Z790 DARK K|NGP|N",
+    "expect": {
+      "capacity": 49040,
+      "encoding": "uncompressed section",
+      "fileOffset": 16356520,
+      "image": "JPEG 1024x768",
+      "inCompressedVolume": true,
+      "logos": 1,
+      "signed": true
+    },
+    "file": "1E798111.bin",
+    "platform": "Intel LGA1700",
+    "sha256": "33dbfd3bf82492f2f57532da77a248e2ab3c392d6e0148b98ba0b4b9e4860f26",
+    "url": "https://www.evga.com/FilesCdn/bios/Z790/E798_flashtool_111.zip",
+    "vendor": "EVGA",
+    "version": "1.11"
   }
 ]

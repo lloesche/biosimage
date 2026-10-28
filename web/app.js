@@ -94,14 +94,14 @@ function onHelpTarget(e) {
 document.addEventListener('mouseover', onHelpTarget);
 document.addEventListener('focusin', onHelpTarget);
 
-const SCREENS = ['fw', 'img', 'build'];
+const SCREENS = ['fw', 'img', 'build', 'explore'];
 
 // The highlighted tab is the screen the cursor is on, or else the next step to do.
 function updateTabs() {
   const done = { fw: !!state.fw, img: !!state.source && !!state.fw, build: state.built };
   const active = state.screen || (!done.fw ? 'fw' : !done.img ? 'img' : 'build');
   for (const k of SCREENS) {
-    $(`tab-${k}`).classList.toggle('done', done[k]);
+    $(`tab-${k}`).classList.toggle('done', !!done[k]);
     $(`tab-${k}`).classList.toggle('on', k === active);
   }
 }
@@ -111,7 +111,7 @@ function updateTabs() {
 // Like a BIOS setup: ↑/↓ select an item, ←/→ switch screens (sliders and radio buttons keep
 // ←/→ for their value), +/- change a value, Enter selects, Home/End jump to the ends.
 
-const ITEM_SELECTOR = 'label.drop, input:not([type=hidden]):not([type=file]), button, a.selbar';
+const ITEM_SELECTOR = 'label.drop, input:not([type=hidden]):not([type=file]), button, a.selbar, .nc-list';
 
 function items(root = document.querySelector('.main')) {
   return [...root.querySelectorAll(ITEM_SELECTOR)].filter((n) =>
@@ -299,6 +299,10 @@ async function loadFirmware(file) {
     setLocked('step-img', true);
     setLocked('step-build', true);
     $('fw-drop-main').textContent = '[ Drop BIOS file here ]';
+    // A file with firmware volumes can still be explored, e.g. to see why no logo was found.
+    ncSetFirmware('orig', info.volumes > 0 ? bytes : null);
+    ncSetFirmware('patched', null);
+    setLocked('step-explore', info.volumes === 0);
     setError($('fw-error'), info.volumes === 0
       ? `${file.name} does not look like a UEFI BIOS file (no firmware volumes found).`
       : `${file.name}: ${info.error}`);
@@ -308,6 +312,9 @@ async function loadFirmware(file) {
   Object.assign(state, { fw: bytes, fwName: file.name, fwInfo: info });
   $('fw-drop-main').textContent = `[ ${file.name} ]`;
   renderFirmware(file);
+  ncSetFirmware('orig', bytes);
+  ncSetFirmware('patched', null);
+  setLocked('step-explore', false);
   resetSize();
   setLocked('step-img', false);
   if (state.source) {
@@ -515,6 +522,7 @@ function updateWarnings() {
 function invalidate() {
   $('result').hidden = true;
   state.built = false;
+  if (nc.sources.patched || nc.pending.patched) ncSetFirmware('patched', null);
   setError($('build-error'));
   updateTabs();
 }
@@ -598,6 +606,7 @@ function showResult(res, check) {
 
   renderFlashHelp();
   $('result').hidden = false;
+  ncSetFirmware('patched', res.data);
   state.built = true;
   updateTabs();
   $('result').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
@@ -628,6 +637,315 @@ function renderFlashHelp() {
   $('download').dataset.help = help;
   showHelp(help);
 }
+
+// ---------- firmware explorer (Norton Commander style, read-only) ----------
+
+const HEX_ROWS = 16;
+
+// charsThatFit returns how many monospace characters fit into an element's content width.
+function charsThatFit(node) {
+  const probe = el('span', { textContent: 'M'.repeat(20) });
+  probe.style.cssText = 'position:absolute;visibility:hidden;white-space:pre';
+  node.append(probe);
+  const w = probe.getBoundingClientRect().width / 20;
+  probe.remove();
+  const style = getComputedStyle(node);
+  const inner = node.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+  return w > 0 ? Math.floor(inner / w) : 80;
+}
+const nc = {
+  sources: { orig: null, patched: null }, // { id, nodes: Map, root }
+  pending: { orig: null, patched: null }, // bytes not yet parsed (parsing waits until the explorer is used)
+  src: 'orig',
+  cwd: null,
+  sel: 0,
+  rows: [],
+  hexPos: 0,
+  hexPage: 256,
+};
+
+function ncSource() {
+  return nc.sources[nc.src];
+}
+
+function ncIndex(src, node, parentId) {
+  node.parentId = parentId;
+  src.nodes.set(node.id, node);
+  for (const c of node.children) ncIndex(src, c, node.id);
+}
+
+function ncClose(which) {
+  if (nc.sources[which]) biosimage.closeExplorer(nc.sources[which].id);
+  nc.sources[which] = null;
+  nc.pending[which] = null;
+}
+
+// ncSetFirmware is called when a BIOS is loaded (or patched): parsing is deferred until the
+// explorer is actually looked at.
+function ncSetFirmware(which, bytes) {
+  ncClose(which);
+  nc.pending[which] = bytes;
+  if (which === 'patched') {
+    $('nc-src-patched').disabled = !bytes;
+    if (!bytes && nc.src === 'patched') {
+      document.querySelector('input[name=nc-src][value=orig]').checked = true;
+      nc.src = 'orig';
+    }
+  }
+  if (nc.src === which) {
+    nc.cwd = null;
+    if (ncVisible) ncEnsure();
+  }
+}
+
+function ncEnsure() {
+  if (!ncSource() && nc.pending[nc.src]) {
+    $('nc-status').textContent = 'Reading firmware structure…';
+    const res = biosimage.explore(nc.pending[nc.src]);
+    const src = { id: res.id, nodes: new Map(), root: res.root };
+    ncIndex(src, res.root, undefined);
+    nc.sources[nc.src] = src;
+    nc.pending[nc.src] = null;
+    nc.cwd = null;
+  }
+  const src = ncSource();
+  if (src && !nc.cwd) {
+    nc.cwd = src.root;
+    nc.sel = 0;
+    ncRender();
+  }
+}
+
+function ncSize(n) {
+  return n < 10000 ? String(n) : n < 10 << 20 ? `${(n / 1024).toFixed(n < 100 << 10 ? 1 : 0)}K` : `${(n / (1 << 20)).toFixed(1)}M`;
+}
+
+function ncIsDir(n) {
+  return n.lazy || n.children.length > 0;
+}
+
+function ncChecksumMark(n) {
+  if (n.kind !== 'file') return '';
+  return n.info.some(([, v]) => v === 'INVALID') ? ' ✗' : ' ✓';
+}
+
+function ncRender() {
+  const src = ncSource();
+  const dir = nc.cwd;
+  if (!src || !dir) return;
+  const up = dir.parentId !== undefined ? [{ up: true, node: src.nodes.get(dir.parentId) }] : [];
+  nc.rows = up.concat(dir.children.map((node) => ({ node })));
+  $('nc-list').replaceChildren(...nc.rows.map((r, i) => {
+    const n = r.node;
+    const dirRow = r.up || ncIsDir(n);
+    const name = r.up ? '..' : `${n.logo ? '★ ' : dirRow ? '▸ ' : '  '}${n.name}`;
+    const row = el('div', { className: 'nc-row', role: 'option' },
+      el('span', { textContent: name }),
+      el('span', { textContent: r.up ? '' : ncSize(n.size) }),
+      el('span', { textContent: r.up ? 'UP--DIR' : (n.lazy ? 'compressed' : n.type) + ncChecksumMark(n) }));
+    row.classList.toggle('dir', dirRow);
+    row.classList.toggle('haslogo', !r.up && (n.hasLogo || n.logo));
+    row.addEventListener('click', () => ncSelect(i));
+    row.addEventListener('dblclick', () => ncOpen(i));
+    return row;
+  }));
+  const path = [];
+  for (let n = dir; n; n = n.parentId !== undefined ? src.nodes.get(n.parentId) : null) path.unshift(n.parentId === undefined ? '' : n.name);
+  let title = (path.join('\\') || '\\') + (nc.src === 'patched' ? '  [patched]' : '');
+  const fit = charsThatFit($('nc-path').parentElement) - 4;
+  if (title.length > fit) title = '…' + title.slice(title.length - fit + 1);
+  $('nc-path').textContent = title;
+  ncSelect(Math.min(nc.sel, nc.rows.length - 1));
+}
+
+function ncSelect(i) {
+  nc.sel = Math.max(0, Math.min(nc.rows.length - 1, i));
+  const rows = $('nc-list').children;
+  for (let k = 0; k < rows.length; k++) rows[k].classList.toggle('sel', k === nc.sel);
+  rows[nc.sel]?.scrollIntoView({ block: 'nearest' });
+  const r = nc.rows[nc.sel];
+  if (!r) return;
+  const n = r.up ? nc.cwd : r.node;
+  nc.hexPos = 0;
+  ncInfo(n);
+  ncHex(n);
+}
+
+function ncInfo(n) {
+  const where = n.buffer ? ' (in decompressed data)' : '';
+  const facts = [['Kind', n.kind], ['Offset', hex8(n.offset) + where], ['Size', `${fmtNum(n.size)} bytes`]];
+  if (n.guid) facts.push(['GUID', n.guid]);
+  for (const [k, v] of n.info) if (k !== 'GUID') facts.push([k, v]);
+  if (n.logo) facts.push(['Boot logo', 'this is the file biosimage replaces']);
+  else if (n.hasLogo) facts.push(['Boot logo', 'inside']);
+  if (n.lazy) facts.push(['Open', 'press Enter to decompress']);
+  $('nc-info-title').textContent = n.name;
+  $('nc-info').replaceChildren(...facts.flatMap(([k, v]) => [el('dt', { textContent: k }), el('dd', { textContent: v })]));
+  $('nc-status').textContent = `${hex8(n.offset)}${where} · ${fmtNum(n.size)} bytes · ${n.type || n.kind}`;
+  const prev = $('nc-preview');
+  prev.hidden = !n.image;
+  if (n.image) {
+    const res = biosimage.nodeBytes(ncSource().id, n.id, n.imageOffset, n.size - n.imageOffset);
+    $('nc-img').src = objectURL('ncImage', res.data, MIME[n.image] || 'application/octet-stream');
+  }
+}
+
+function ncHex(n) {
+  const pre = $('nc-hex');
+  // 16 bytes per row (76 characters) when the panel is wide enough, else 8 (43 characters);
+  // a page is always HEX_ROWS rows.
+  const fit = charsThatFit(pre);
+  const per = fit >= 76 ? 16 : 8;
+  const showAscii = fit >= 43;
+  nc.hexPage = per * HEX_ROWS;
+  nc.hexPos -= nc.hexPos % nc.hexPage;
+  const res = biosimage.nodeBytes(ncSource().id, n.id, nc.hexPos, nc.hexPage);
+  const data = res.data || new Uint8Array();
+  pre.replaceChildren();
+  for (let row = 0; row < data.length; row += per) {
+    const chunk = data.subarray(row, row + per);
+    const hexs = [...chunk].map((b) => b.toString(16).toUpperCase().padStart(2, '0'));
+    const ascii = [...chunk].map((b) => (b >= 0x20 && b < 0x7f ? String.fromCharCode(b) : '.')).join('');
+    const groups = per === 16 ? `${hexs.slice(0, 8).join(' ').padEnd(23)}  ${hexs.slice(8).join(' ').padEnd(23)}` : hexs.join(' ').padEnd(23);
+    pre.append(el('span', { className: 'off', textContent: (n.offset + nc.hexPos + row).toString(16).toUpperCase().padStart(8, '0') }),
+      `  ${groups}  `, el('span', { className: 'asc', textContent: showAscii ? ascii : '' }), '\n');
+  }
+  $('nc-hex-title').textContent = `Hex${n.buffer ? ' (decompressed)' : ''}`;
+  $('nc-hex-pos').textContent = n.size
+    ? `${fmtNum(nc.hexPos)}–${fmtNum(nc.hexPos + data.length)} of ${fmtNum(n.size)}`
+    : '';
+}
+
+function ncHexPage(dir) {
+  const r = nc.rows[nc.sel];
+  if (!r) return;
+  const n = r.up ? nc.cwd : r.node;
+  const pos = nc.hexPos + dir * nc.hexPage;
+  if (pos < 0 || pos >= n.size) return;
+  nc.hexPos = pos;
+  ncHex(n);
+}
+
+// ncExpand fetches the children of a node that is still lazy on the JavaScript side.
+function ncExpand(n) {
+  const src = ncSource();
+  $('nc-status').textContent = 'Decompressing…';
+  const res = biosimage.expandNode(src.id, n.id);
+  if (res.error) {
+    $('nc-status').textContent = `Error: ${res.error}`;
+    return false;
+  }
+  n.children = res.children;
+  n.lazy = false;
+  for (const c of n.children) ncIndex(src, c, n.id);
+  return true;
+}
+
+// repaint lets the browser show a status message before a long synchronous call.
+const repaint = () => new Promise((r) => setTimeout(r, 30));
+
+async function ncOpen(i) {
+  const r = nc.rows[i];
+  if (!r) return;
+  if (r.up) return ncUp();
+  const n = r.node;
+  if (n.lazy) {
+    $('nc-status').textContent = 'Decompressing…';
+    await repaint();
+    if (!ncExpand(n)) return;
+  }
+  if (!n.children.length) return;
+  nc.cwd = n;
+  nc.sel = 1;
+  ncRender();
+}
+
+function ncUp() {
+  const src = ncSource();
+  if (!src || nc.cwd.parentId === undefined) return;
+  const prev = nc.cwd;
+  nc.cwd = src.nodes.get(prev.parentId);
+  nc.sel = nc.cwd.children.indexOf(prev) + (nc.cwd.parentId !== undefined ? 1 : 0);
+  ncRender();
+}
+
+async function ncGoLogo() {
+  ncEnsure();
+  const src = ncSource();
+  if (!src) return;
+  $('nc-status').textContent = 'Searching for the boot logo…';
+  await repaint();
+  const path = biosimage.logoPath(src.id).path || [];
+  if (!path.length) {
+    $('nc-status').textContent = 'No boot logo file found in this image.';
+    return;
+  }
+  let dir = src.root;
+  for (const id of path.slice(1)) {
+    let next = dir.children.find((c) => c.id === id);
+    if (!next && (dir.lazy || dir.children.length === 0 || !src.nodes.has(id))) {
+      if (!ncExpand(dir)) return;
+      next = dir.children.find((c) => c.id === id);
+    }
+    if (!next) return;
+    if (id === path[path.length - 1]) {
+      nc.cwd = dir;
+      nc.sel = dir.children.indexOf(next) + (dir.parentId !== undefined ? 1 : 0);
+      ncRender();
+      $('nc-list').focus({ preventScroll: true });
+      return;
+    }
+    dir = next;
+  }
+}
+
+$('nc-list').addEventListener('keydown', (e) => {
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  const last = nc.rows.length - 1;
+  const actions = {
+    ArrowDown: () => nc.sel < last && ncSelect(nc.sel + 1),
+    ArrowUp: () => nc.sel > 0 && ncSelect(nc.sel - 1),
+    PageDown: () => ncSelect(nc.sel + 15),
+    PageUp: () => ncSelect(nc.sel - 15),
+    Home: () => ncSelect(0),
+    End: () => ncSelect(last),
+    Enter: () => ncOpen(nc.sel),
+    ArrowRight: () => ncOpen(nc.sel),
+    Backspace: ncUp,
+    ArrowLeft: ncUp,
+    l: ncGoLogo,
+    L: ncGoLogo,
+    '[': () => ncHexPage(-1),
+    ']': () => ncHexPage(1),
+  };
+  // At the ends of the list, ↑/↓ leave the explorer like any other item.
+  if ((e.key === 'ArrowDown' && nc.sel >= last) || (e.key === 'ArrowUp' && nc.sel <= 0)) return;
+  const action = actions[e.key];
+  if (!action) return;
+  e.preventDefault();
+  e.stopPropagation();
+  action();
+});
+$('nc-list').addEventListener('focus', ncEnsure);
+$('nc-list').addEventListener('mousedown', ncEnsure);
+$('step-explore').addEventListener('focusin', () => setTimeout(ncEnsure, 0));
+$('nc-logo').addEventListener('click', ncGoLogo);
+$('nc-hex-prev').addEventListener('click', () => ncHexPage(-1));
+$('nc-hex-next').addEventListener('click', () => ncHexPage(1));
+for (const r of document.querySelectorAll('input[name=nc-src]')) {
+  r.addEventListener('change', () => {
+    nc.src = r.value;
+    nc.cwd = null;
+    ncEnsure();
+  });
+}
+
+// Parse the structure only once the explorer scrolls into view.
+let ncVisible = false;
+new IntersectionObserver((entries) => {
+  ncVisible = entries.some((en) => en.isIntersecting);
+  if (ncVisible && !$('step-explore').classList.contains('locked')) setTimeout(ncEnsure, 0);
+}).observe($('step-explore'));
 
 // ---------- wiring ----------
 
@@ -662,6 +980,7 @@ document.addEventListener('keydown', async (e) => {
 
 setLocked('step-img', true);
 setLocked('step-build', true);
+setLocked('step-explore', true);
 updateControls();
 updateTabs();
 showHelp(DEFAULT_HELP);

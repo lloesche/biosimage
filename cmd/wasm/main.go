@@ -18,6 +18,11 @@ func main() {
 	api.Set("inspectFirmware", export(inspectFirmware))
 	api.Set("inspectImage", export(inspectImage))
 	api.Set("replaceLogo", export(replaceLogo))
+	api.Set("explore", export(explore))
+	api.Set("expandNode", export(expandNode))
+	api.Set("nodeBytes", export(nodeBytes))
+	api.Set("logoPath", export(logoPath))
+	api.Set("closeExplorer", export(closeExplorer))
 	js.Global().Set("biosimage", api)
 	select {}
 }
@@ -124,4 +129,86 @@ func replaceLogo(args []js.Value) map[string]any {
 		}
 	}
 	return map[string]any{"data": bytesTo(out), "changes": list}
+}
+
+// Explorers keep a parsed image (and the sections decompressed so far) between calls.
+var (
+	explorers    = map[int]*uefi.Explorer{}
+	nextExplorer = 1
+)
+
+func nodeJS(n *uefi.Node) map[string]any {
+	info := make([]any, len(n.Info))
+	for i, kv := range n.Info {
+		info[i] = []any{kv[0], kv[1]}
+	}
+	children := make([]any, len(n.Children))
+	for i, c := range n.Children {
+		children[i] = nodeJS(c)
+	}
+	return map[string]any{
+		"id": n.ID, "kind": n.Kind, "name": n.Name, "type": n.Type, "guid": n.GUID,
+		"offset": n.Offset, "size": n.Size, "buffer": n.Buffer, "info": info,
+		"logo": n.Logo, "hasLogo": n.HasLogo, "image": n.Image, "imageOffset": n.ImageOffset,
+		"lazy": n.Lazy, "children": children,
+	}
+}
+
+func explorerArg(args []js.Value) (*uefi.Explorer, map[string]any) {
+	e := explorers[args[0].Int()]
+	if e == nil {
+		return nil, map[string]any{"error": "unknown explorer"}
+	}
+	return e, nil
+}
+
+// explore(firmware) -> {id, root}
+func explore(args []js.Value) map[string]any {
+	e := uefi.NewExplorer(bytesFrom(args[0]))
+	id := nextExplorer
+	nextExplorer++
+	explorers[id] = e
+	return map[string]any{"id": id, "root": nodeJS(e.Root())}
+}
+
+// expandNode(explorer, node) -> node with children (decompressing lazy sections)
+func expandNode(args []js.Value) map[string]any {
+	e, errRes := explorerArg(args)
+	if e == nil {
+		return errRes
+	}
+	n, err := e.Expand(args[1].Int())
+	if err != nil {
+		return map[string]any{"error": err.Error()}
+	}
+	return nodeJS(n)
+}
+
+// nodeBytes(explorer, node, offset, length) -> {data}
+func nodeBytes(args []js.Value) map[string]any {
+	e, errRes := explorerArg(args)
+	if e == nil {
+		return errRes
+	}
+	return map[string]any{"data": bytesTo(e.Bytes(args[1].Int(), args[2].Int(), args[3].Int()))}
+}
+
+// logoPath(explorer) -> {path: [node IDs from the root to the logo file]}
+func logoPath(args []js.Value) map[string]any {
+	e, errRes := explorerArg(args)
+	if e == nil {
+		return errRes
+	}
+	path := e.LogoPath()
+	ids := make([]any, len(path))
+	for i, id := range path {
+		ids[i] = id
+	}
+	return map[string]any{"path": ids}
+}
+
+// closeExplorer(explorer) releases the image.
+func closeExplorer(args []js.Value) map[string]any {
+	delete(explorers, args[0].Int())
+	return map[string]any{}
 }

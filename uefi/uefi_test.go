@@ -342,6 +342,48 @@ func TestReplaceInsideCompressedVolume(t *testing.T) {
 	}
 }
 
+func TestExplorerFindsLogoInCompressedVolume(t *testing.T) {
+	inner := buildVolume(t, 0x10000, 0xFF, otherFile(t, 40, 0xFF), lzmaLogoFile(t, makeBMP(16, 8, false), 0xFF))
+	payload, err := lzmaCompress(NewSection(SectionFVImage, inner), lzmaParams{lzmaDefaultProps, lzmaDefaultDict})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fvFile, err := BuildFile(MustParseGUID("9E21FD93-9C72-4C15-8C4B-E77F1DB2D792"), FileTypeFVImage, 0,
+		newGuidedSection(LZMASectionGUID, guidedProcessingRequired, payload), 0xFF)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := NewExplorer(buildImage(buildVolume(t, 0x40000, 0xFF, fvFile)))
+	root := e.Root()
+	if len(root.Children) != 2 || root.Children[0].Kind != "region" || root.Children[1].Kind != "volume" {
+		t.Fatalf("unexpected top level: %+v", root.Children)
+	}
+	if !root.HasLogo {
+		t.Fatal("root not marked as containing the logo")
+	}
+	path := e.LogoPath()
+	if len(path) == 0 {
+		t.Fatal("no logo path")
+	}
+	logo := e.Node(path[len(path)-1])
+	if !logo.Logo || logo.Buffer == 0 {
+		t.Fatalf("path ends at %+v", logo)
+	}
+	var img *Node
+	for _, c := range logo.Children {
+		for _, cc := range c.Children {
+			for _, ccc := range cc.Children {
+				if ccc.Image != "" {
+					img = ccc
+				}
+			}
+		}
+	}
+	if img == nil || img.Image != "BMP" || !bytes.Equal(e.Bytes(img.ID, img.ImageOffset, 2), []byte("BM")) {
+		t.Fatalf("image section not found or unreadable: %+v", img)
+	}
+}
+
 func TestDetectEmbeddedSignature(t *testing.T) {
 	block := append(append(append([]byte{}, AMICapsuleGUID[:]...), make([]byte, 24)...), CertRSA2048GUID[:]...)
 	fw := append(buildImage(buildVolume(t, 0x2000, 0xFF, otherFile(t, 10, 0xFF))), block...)

@@ -20,6 +20,7 @@
     <a href="#step-fw" class="tab" id="tab-fw">Main</a>
     <a href="#step-img" class="tab" id="tab-img">Logo</a>
     <a href="#step-build" class="tab" id="tab-build">Save &amp; Exit</a>
+    <a href="#step-explore" class="tab" id="tab-explore">Explorer</a>
   </nav>
 
   <div class="frame">
@@ -138,6 +139,41 @@
           <a class="selbar" id="download" data-help="Saves the patched BIOS to your computer. Keep the original file as well."><span>Save Changes and Download</span><span id="download-name"></span></a>
           <div id="flash-help"></div>
         </div>
+      </section>
+
+      <!-- Firmware explorer (read-only) -->
+      <section class="step locked" id="step-explore">
+        <h2>Firmware Explorer</h2>
+        <p class="locked-note">— Load a BIOS file first —</p>
+        <div class="nc-bar">
+          <span class="v" data-help="Browse the original file or, after “Create Patched BIOS”, the patched one to see exactly what changed.">
+            <label class="opt"><input type="radio" name="nc-src" value="orig" checked><span>Original</span></label>
+            <label class="opt"><input type="radio" name="nc-src" value="patched" id="nc-src-patched" disabled><span>Patched</span></label>
+          </span>
+          <button type="button" class="key" id="nc-logo" data-help="Jumps to the boot logo file, opening compressed volumes on the way. Shortcut: L">[L] Go to logo</button>
+        </div>
+        <div class="nc" id="nc">
+          <div class="nc-panel">
+            <div class="nc-title" id="nc-path">\</div>
+            <div class="nc-head"><span>Name</span><span>Size</span><span>Type</span></div>
+            <div class="nc-list" id="nc-list" tabindex="0" role="listbox" aria-label="Firmware structure"
+              data-help="The structure of the BIOS image: volumes contain files, files contain sections, and some sections contain more volumes, compressed or not.&#10;&#10;↑↓ select, Enter open, Backspace up, L go to logo, [ ] page through the hex view.&#10;&#10;★ marks the boot logo file, yellow entries lead to it, ✓ means all checksums are valid."></div>
+            <div class="nc-status" id="nc-status"></div>
+          </div>
+          <div class="nc-panel">
+            <div class="nc-title" id="nc-info-title">Info</div>
+            <dl class="nc-info" id="nc-info"></dl>
+            <div class="nc-preview" id="nc-preview" hidden><img id="nc-img" alt="Image stored in the firmware"></div>
+            <div class="nc-title nc-sub" id="nc-hex-title">Hex</div>
+            <pre class="nc-hex" id="nc-hex"></pre>
+            <div class="nc-hexnav">
+              <button type="button" class="key" id="nc-hex-prev">[Prev]</button>
+              <span id="nc-hex-pos"></span>
+              <button type="button" class="key" id="nc-hex-next">[Next]</button>
+            </div>
+          </div>
+        </div>
+        <div class="nc-keys"><span><b>Enter</b>Open</span><span><b>Bksp</b>Up</span><span><b>L</b>Logo</span><span><b>[ ]</b>Hex page</span><span><b>Home End</b>First/Last</span></div>
       </section>
     </main>
 

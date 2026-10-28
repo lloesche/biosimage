@@ -28,7 +28,7 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: main
       - name: Fetch WebAssembly module from the latest release
@@ -45,16 +45,16 @@ jobs:
             echo "No release yet, building from source"
             echo "built=true" >> "$GITHUB_OUTPUT"
           fi
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         if: steps.release.outputs.built == 'true'
         with:
           go-version-file: go.mod
       - name: Build WebAssembly module from source
         if: steps.release.outputs.built == 'true'
         run: go run ./cmd/buildweb -version "dev-$(git rev-parse --short HEAD)"
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/configure-pages@v6
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: web
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5

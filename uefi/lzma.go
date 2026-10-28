@@ -18,6 +18,9 @@ const (
 	lzmaDefaultProps = 0x5D // lc=3 lp=0 pb=2
 	lzmaDefaultDict  = 1 << 24
 	lzmaMaxOutput    = 256 << 20
+	// lzmaMaxDict bounds the dictionary a stream may ask for; the decoder allocates it
+	// before reading any data (GHSA-jc7w-c686-c4v9). Firmware uses at most a few MiB.
+	lzmaMaxDict = 64 << 20
 )
 
 type lzmaParams struct {
@@ -33,7 +36,10 @@ func lzmaDecompress(stream []byte) ([]byte, error) {
 	if size > lzmaMaxOutput {
 		return nil, fmt.Errorf("implausible LZMA output size %d", size)
 	}
-	r, err := lzma.NewReader(bytes.NewReader(stream))
+	if dict := binary.LittleEndian.Uint32(stream[1:]); dict > lzmaMaxDict {
+		return nil, fmt.Errorf("implausible LZMA dictionary size %d", dict)
+	}
+	r, err := lzma.ReaderConfig{DictCap: lzmaMaxDict}.NewReader(bytes.NewReader(stream))
 	if err != nil {
 		return nil, err
 	}

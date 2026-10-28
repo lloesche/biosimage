@@ -176,6 +176,18 @@ func TestLZMAFormat(t *testing.T) {
 	}
 }
 
+func TestLZMARejectsHugeDictionary(t *testing.T) {
+	// A mangled header claiming a 2 GiB dictionary must be rejected before any allocation.
+	stream, err := lzmaCompress(makeBMP(8, 8, false), lzmaParams{lzmaDefaultProps, lzmaDefaultDict})
+	if err != nil {
+		t.Fatal(err)
+	}
+	binary.LittleEndian.PutUint32(stream[1:], 2<<30)
+	if _, err := lzmaDecompress(stream); err == nil || !strings.Contains(err.Error(), "dictionary") {
+		t.Fatalf("expected dictionary error, got %v", err)
+	}
+}
+
 func TestFindVolumesSkipsBadChecksum(t *testing.T) {
 	v := buildVolume(t, 0x4000, 0xFF, otherFile(t, 10, 0xFF))
 	bad := bytes.Clone(v)

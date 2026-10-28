@@ -342,7 +342,7 @@ func (e *Explorer) section(parent *Node, base int, s Section) {
 			e.sections(inner, 0, data)
 			return nil
 		}
-		if size > lazyThreshold {
+		if size > lazyThreshold && !inLogoFile(n) {
 			n.Lazy = true
 		} else if err := n.expand(); err == nil {
 			n.expand = nil
@@ -443,4 +443,15 @@ func sectionTypeName(t byte) string {
 		return n
 	}
 	return fmt.Sprintf("Section %#02x", t)
+}
+
+// inLogoFile reports whether n is a section of a logo file. Those are always decompressed,
+// so the logo can be previewed even when it is large.
+func inLogoFile(n *Node) bool {
+	for p := n.parent; p != nil; p = p.parent {
+		if p.Kind == "file" {
+			return p.Logo
+		}
+	}
+	return false
 }

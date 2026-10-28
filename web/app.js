@@ -771,6 +771,21 @@ function ncSelect(i) {
   ncHex(n);
 }
 
+// ncImageNode returns the node holding the image to preview for n: n itself, or for files and
+// sections the first image stored inside them (already decompressed, a few levels deep), so
+// that e.g. the logo file shows the logo without opening its sections.
+function ncImageNode(n) {
+  if (n.image) return n;
+  if (n.kind !== 'file' && n.kind !== 'section') return null;
+  let level = n.children;
+  for (let depth = 0; depth < 4 && level.length; depth++) {
+    const found = level.find((c) => c.image);
+    if (found) return found;
+    level = level.flatMap((c) => c.children);
+  }
+  return null;
+}
+
 function ncInfo(n) {
   const where = n.buffer ? ' (in decompressed data)' : '';
   const facts = [['Kind', n.kind], ['Offset', hex8(n.offset) + where], ['Size', `${fmtNum(n.size)} bytes`]];
@@ -779,14 +794,15 @@ function ncInfo(n) {
   if (n.logo) facts.push(['Boot logo', 'this is the file biosimage replaces']);
   else if (n.hasLogo) facts.push(['Boot logo', 'inside']);
   if (n.lazy) facts.push(['Open', 'press Enter to decompress']);
+  const img = ncImageNode(n);
+  if (img && img !== n) facts.push(['Contains', img.name.replace(/^Image: /, 'image ')]);
   $('nc-info-title').textContent = n.name;
   $('nc-info').replaceChildren(...facts.flatMap(([k, v]) => [el('dt', { textContent: k }), el('dd', { textContent: v })]));
   $('nc-status').textContent = `${hex8(n.offset)}${where} · ${fmtNum(n.size)} bytes · ${n.type || n.kind}`;
-  const prev = $('nc-preview');
-  prev.hidden = !n.image;
-  if (n.image) {
-    const res = biosimage.nodeBytes(ncSource().id, n.id, n.imageOffset, n.size - n.imageOffset);
-    $('nc-img').src = objectURL('ncImage', res.data, MIME[n.image] || 'application/octet-stream');
+  $('nc-preview').hidden = !img;
+  if (img) {
+    const res = biosimage.nodeBytes(ncSource().id, img.id, img.imageOffset, img.size - img.imageOffset);
+    $('nc-img').src = objectURL('ncImage', res.data, MIME[img.image] || 'application/octet-stream');
   }
 }
 

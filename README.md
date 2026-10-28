@@ -107,14 +107,24 @@ FlashBack writes the whole chip, so expect your BIOS settings to be reset.
 5. Re-parse the volume and verify all file checksums, that all other files are byte-identical,
    that nothing outside the volume changed and that the logo decodes to the new image.
 
-Not supported: logos inside compressed volumes (common on some Intel boards and other
-vendors), Intel Boot Guard-protected regions, and more than one logo file per volume.
+Not supported (yet): logos inside compressed firmware volumes, which is how MSI, Gigabyte and
+ASRock store them, Intel Boot Guard-protected regions, and more than one logo file per volume.
 
 ## Tested with
 
-| Board | BIOS | Result |
-|---|---|---|
-| ASUS TUF GAMING B850I WIFI NEO | 1804 (`A5766.CAP`) | works, flashed via USB BIOS FlashBack |
+These images are tested weekly by the [vendor firmware workflow](.github/workflows/firmware.yml),
+which downloads them from the vendors' servers (see [`testdata/firmware.json`](testdata/firmware.json)).
+
+| Vendor | Board | Platform | BIOS | Result |
+|---|---|---|---|---|
+| ASUS | TUF GAMING B850I WIFI NEO | AM5 | 1804 | ✅ works, flashed via USB BIOS FlashBack |
+| ASUS | TUF GAMING B550-PLUS | AM4 | 3645 | ✅ patches both logo copies (not flashed) |
+| ASUS | PRIME Z790-P | Intel LGA1700 | 1836 | ✅ patches (not flashed) |
+| MSI | MAG B650 TOMAHAWK WIFI | AM5 | 7D75v1R3 | ❌ logo inside a compressed volume |
+| MSI | PRO Z790-A WIFI | Intel LGA1700 | 7E07vAJ | ❌ no standard logo file found |
+| Gigabyte | B550 AORUS ELITE V2 | AM4 | F20c | ❌ logo inside a compressed volume |
+| Gigabyte | Z790 AORUS ELITE AX | Intel LGA1700 | FP | ❌ logo inside a compressed volume |
+| ASRock | B650M Pro RS | AM5 | 4.60 | ❌ logo inside a compressed volume |
 
 Reports for other boards are welcome; please include the output of `biosimage info`.
 
@@ -126,7 +136,15 @@ BIOSIMAGE_FIRMWARE=/path/to/bios.cap go test ./...   # also run against a real i
 ```
 
 The test suite builds synthetic firmware volumes, so no vendor binaries are needed or
-included.
+included. To also test against the vendor images in `testdata/firmware.json` (downloaded from
+the vendors' servers and verified by SHA-256 on first use):
+
+```sh
+BIOSIMAGE_FIRMWARE_CACHE=~/.cache/biosimage-firmware go test ./uefi -run TestVendorFirmware -v
+```
+
+Vendor firmware is never committed or uploaded as a CI artifact; it is not ours to
+redistribute.
 
 ### Web app
 

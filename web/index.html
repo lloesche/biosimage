@@ -118,11 +118,7 @@
         <p class="locked-note">— Choose a new logo first —</p>
         <ul class="warnings" id="img-warnings" hidden></ul>
         <label class="opt" id="force-label" hidden data-help="The firmware may fail to show this image. If it does, the screen stays black during boot; the BIOS itself still works."><input type="checkbox" id="force"><span>Insert the image anyway</span></label>
-        <div class="field" data-help="By default the logo is LZMA-compressed like the original. Only store it uncompressed if your board does not show a compressed logo.">
-          <span class="k">Compression</span>
-          <span class="v"><label class="opt"><input type="checkbox" id="nocompress"><span>Store uncompressed</span></label></span>
-        </div>
-        <button type="button" class="selbar" id="build" data-help="Builds the patched BIOS in your browser, then reads it back from scratch to verify the firmware and the new logo.&#10;&#10;Shortcut: Ctrl+S (⌘S on a Mac) or F10."><span>Create Patched BIOS</span><span>[<span class="save-key">Ctrl+S</span> / F10]</span></button>
+        <button type="button" class="selbar" id="build" data-help="Builds the patched BIOS in your browser, storing the logo the same way as the original (e.g. LZMA-compressed), then reads it back from scratch to verify the firmware and the new logo.&#10;&#10;Shortcut: Ctrl+S (⌘S on a Mac) or F10."><span>Create Patched BIOS</span><span>[<span class="save-key">Ctrl+S</span> / F10]</span></button>
         <p class="error" id="build-error" role="alert" hidden></p>
 
         <div class="result" id="result" hidden>
@@ -152,7 +148,7 @@
   </div>
 
   <footer class="keys">
-    <span>Tab: Select Item &nbsp; Enter: Select &nbsp; <b class="save-key">Ctrl+S</b> / <b>F10</b>: Save &amp; Download</span>
+    <span>←→: Select Screen &nbsp; ↑↓: Select Item &nbsp; Enter: Select &nbsp; +/-: Change Value &nbsp; <b class="save-key">Ctrl+S</b> / <b>F10</b>: Save &amp; Download</span>
     <span><a href="https://github.com/lloesche/biosimage">github.com/lloesche/biosimage</a> · MIT</span>
   </footer>
 

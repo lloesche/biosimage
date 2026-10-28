@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"strings"
 	"unicode/utf16"
 )
 
@@ -12,6 +11,7 @@ import (
 const (
 	SectionCompression = 0x01
 	SectionGUIDDefined = 0x02
+	SectionVersion     = 0x14
 	SectionUI          = 0x15
 	SectionFVImage     = 0x17
 	SectionRaw         = 0x19
@@ -90,14 +90,7 @@ func NewUISection(name string) []byte {
 }
 
 // UIName decodes a user interface section.
-func (s Section) UIName() string {
-	b := s.Body()
-	u := make([]uint16, len(b)/2)
-	for i := range u {
-		u[i] = binary.LittleEndian.Uint16(b[2*i:])
-	}
-	return strings.TrimRight(string(utf16.Decode(u)), "\x00")
-}
+func (s Section) UIName() string { return UTF16String(s.Body()) }
 
 // guidedHeader parses an EFI_GUID_DEFINED_SECTION header.
 func (s Section) guidedHeader() (g GUID, dataOffset int, attrs uint16, err error) {

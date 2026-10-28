@@ -3,6 +3,7 @@ package uefi
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -197,19 +198,26 @@ func TestFindVolumesSkipsBadChecksum(t *testing.T) {
 	}
 }
 
-func TestReplaceLZMALastFileGrows(t *testing.T) {
-	old, img := makeBMP(32, 16, false), makeBMP(200, 100, true)
-	fw := buildImage(buildVolume(t, 0x40000, 0xFF, otherFile(t, 100, 0xFF), lzmaLogoFile(t, old, 0xFF)))
-	out, changes, err := ReplaceLogo(fw, img, LogoFileGUID, ReplaceOptions{})
+// replace runs ReplaceLogo and fails the test on error.
+func replace(t *testing.T, fw, img []byte, opt ReplaceOptions) *Patch {
+	t.Helper()
+	p, err := ReplaceLogo(fw, img, LogoFileGUID, opt)
 	if err != nil {
 		t.Fatal(err)
 	}
-	l := checkVolume(t, out, img)
+	return p
+}
+
+func TestReplaceLZMALastFileGrows(t *testing.T) {
+	old, img := makeBMP(32, 16, false), makeBMP(200, 100, true)
+	fw := buildImage(buildVolume(t, 0x40000, 0xFF, otherFile(t, 100, 0xFF), lzmaLogoFile(t, old, 0xFF)))
+	p := replace(t, fw, img, ReplaceOptions{})
+	l := checkVolume(t, p.Data, img)
 	if l.Encoding != EncodingLZMA || l.Name != "Logo.bmp" {
 		t.Fatalf("encoding %v name %q", l.Encoding, l.Name)
 	}
-	if changes[0].NewOffset != changes[0].OldOffset || !strings.Contains(changes[0].Placement, "last file") {
-		t.Fatalf("unexpected placement %+v", changes[0])
+	if c := p.Changes[0]; c.NewOffset != c.OldOffset || c.Placement != PlacedLast || c.Storage != StoredLZMA {
+		t.Fatalf("unexpected change %+v", c)
 	}
 }
 
@@ -217,19 +225,16 @@ func TestReplaceRelocatesWhenNotLast(t *testing.T) {
 	old, img := makeBMP(16, 16, false), makeBMP(100, 60, true)
 	other := otherFile(t, 50, 0xFF)
 	fw := buildImage(buildVolume(t, 0x20000, 0xFF, rawLogoFile(t, old, 0xFF), other))
-	out, changes, err := ReplaceLogo(fw, img, LogoFileGUID, ReplaceOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	checkVolume(t, out, img)
-	c := changes[0]
-	if c.NewOffset <= c.OldOffset || !strings.Contains(c.Placement, "moved") {
+	p := replace(t, fw, img, ReplaceOptions{})
+	checkVolume(t, p.Data, img)
+	c := p.Changes[0]
+	if c.NewOffset <= c.OldOffset || c.Placement != PlacedMoved {
 		t.Fatalf("unexpected placement %+v", c)
 	}
-	if !bytes.Contains(out, other) {
+	if !bytes.Contains(p.Data, other) {
 		t.Fatal("other file was modified")
 	}
-	if out[c.OldOffset+18] != FileTypePad {
+	if p.Data[c.OldOffset+18] != FileTypePad {
 		t.Fatal("old slot is not a pad file")
 	}
 }
@@ -237,12 +242,9 @@ func TestReplaceRelocatesWhenNotLast(t *testing.T) {
 func TestReplaceShrinksInPlaceWithPad(t *testing.T) {
 	old, img := makeBMP(64, 64, true), makeBMP(16, 16, true)
 	fw := buildImage(buildVolume(t, 0x20000, 0xFF, rawLogoFile(t, old, 0xFF), otherFile(t, 50, 0xFF)))
-	out, changes, err := ReplaceLogo(fw, img, LogoFileGUID, ReplaceOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	checkVolume(t, out, img)
-	if c := changes[0]; c.NewOffset != c.OldOffset || !strings.Contains(c.Placement, "padded") {
+	p := replace(t, fw, img, ReplaceOptions{})
+	checkVolume(t, p.Data, img)
+	if c := p.Changes[0]; c.NewOffset != c.OldOffset || c.Placement != PlacedPadded {
 		t.Fatalf("unexpected placement %+v", c)
 	}
 }
@@ -250,23 +252,20 @@ func TestReplaceShrinksInPlaceWithPad(t *testing.T) {
 func TestReplaceKeepsUncompressed(t *testing.T) {
 	img := makeBMP(40, 20, false)
 	fw := buildImage(buildVolume(t, 0x20000, 0xFF, rawLogoFile(t, makeBMP(8, 8, false), 0xFF)))
-	out, _, err := ReplaceLogo(fw, img, LogoFileGUID, ReplaceOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if l := checkVolume(t, out, img); l.Encoding != EncodingRawSection || l.Name != "Logo" {
+	p := replace(t, fw, img, ReplaceOptions{})
+	if l := checkVolume(t, p.Data, img); l.Encoding != EncodingRawSection || l.Name != "Logo" {
 		t.Fatalf("encoding %v name %q", l.Encoding, l.Name)
+	}
+	if p.Changes[0].Storage != StoredUncompressed {
+		t.Fatalf("storage %v", p.Changes[0].Storage)
 	}
 }
 
 func TestReplaceRawFileType(t *testing.T) {
 	img := makeBMP(10, 10, false)
 	fw := buildImage(buildVolume(t, 0x10000, 0xFF, mustFile(t, LogoFileGUID, FileTypeRaw, makeBMP(4, 4, false), 0xFF)))
-	out, _, err := ReplaceLogo(fw, img, LogoFileGUID, ReplaceOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if l := checkVolume(t, out, img); l.Encoding != EncodingRawFile {
+	p := replace(t, fw, img, ReplaceOptions{})
+	if l := checkVolume(t, p.Data, img); l.Encoding != EncodingRawFile {
 		t.Fatalf("encoding %v", l.Encoding)
 	}
 }
@@ -274,24 +273,21 @@ func TestReplaceRawFileType(t *testing.T) {
 func TestReplaceNoCompressUnwrapsLZMA(t *testing.T) {
 	img := makeBMP(30, 30, false)
 	fw := buildImage(buildVolume(t, 0x20000, 0xFF, lzmaLogoFile(t, makeBMP(8, 8, false), 0xFF)))
-	out, _, err := ReplaceLogo(fw, img, LogoFileGUID, ReplaceOptions{NoCompress: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if l := checkVolume(t, out, img); l.Encoding != EncodingRawSection || l.Name != "Logo.bmp" {
+	p := replace(t, fw, img, ReplaceOptions{NoCompress: true})
+	if l := checkVolume(t, p.Data, img); l.Encoding != EncodingRawSection || l.Name != "Logo.bmp" {
 		t.Fatalf("encoding %v name %q", l.Encoding, l.Name)
+	}
+	if p.Changes[0].Storage != StoredUnwrapped {
+		t.Fatalf("storage %v", p.Changes[0].Storage)
 	}
 }
 
 func TestReplaceErasePolarityZero(t *testing.T) {
 	img := makeBMP(30, 30, true)
 	fw := buildImage(buildVolume(t, 0x20000, 0x00, otherFile(t, 10, 0x00), rawLogoFile(t, makeBMP(8, 8, false), 0x00)))
-	out, _, err := ReplaceLogo(fw, img, LogoFileGUID, ReplaceOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	l := checkVolume(t, out, img)
-	if s := out[l.File.Offset+23]; s != fileStateValid {
+	p := replace(t, fw, img, ReplaceOptions{})
+	l := checkVolume(t, p.Data, img)
+	if s := p.Data[l.File.Offset+23]; s != fileStateValid {
 		t.Fatalf("state %#x", s)
 	}
 }
@@ -305,103 +301,104 @@ func TestReplaceNestedVolumeUpdatesParentChecksum(t *testing.T) {
 		t.Fatal(err)
 	}
 	fw := buildImage(buildVolume(t, 0x20000, 0xFF, otherFile(t, 20, 0xFF), raw))
-	out, _, err := ReplaceLogo(fw, img, LogoFileGUID, ReplaceOptions{})
+	p := replace(t, fw, img, ReplaceOptions{})
+	l := checkVolume(t, p.Data, img)
+	hops := l.Enclosing()
+	if len(hops) != 1 || hops[0].Compressed || l.Compressed() {
+		t.Fatalf("expected the logo in an uncompressed nested volume, got %+v", hops)
+	}
+	if f := hops[0].File; !headerChecksumOK(p.Data, f) || !dataChecksumOK(p.Data, f) {
+		t.Fatal("enclosing RAW file checksum not updated")
+	}
+}
+
+// compressedVolumeFile returns an FV image file whose LZMA section holds a volume, as MSI
+// uses on Intel boards.
+func compressedVolumeFile(t *testing.T, inner []byte, attrs byte) []byte {
+	t.Helper()
+	payload, err := lzmaCompress(NewSection(SectionFVImage, inner), lzmaParams{lzmaDefaultProps, lzmaDefaultDict})
 	if err != nil {
 		t.Fatal(err)
 	}
-	l := checkVolume(t, out, img)
-	if len(l.Volume.Parents) != 1 {
-		t.Fatalf("expected the logo in a nested volume, parents: %d", len(l.Volume.Parents))
+	f, err := BuildFile(MustParseGUID("9E21FD93-9C72-4C15-8C4B-E77F1DB2D792"), FileTypeFVImage, attrs,
+		newGuidedSection(LZMASectionGUID, guidedProcessingRequired, payload), 0xFF)
+	if err != nil {
+		t.Fatal(err)
 	}
-	p := l.Volume.Parents[0]
-	if !headerChecksumOK(out, p) || !dataChecksumOK(out, p) {
-		t.Fatal("enclosing RAW file checksum not updated")
-	}
+	return f
 }
 
 func TestReplaceInsideCompressedVolume(t *testing.T) {
 	// MSI-on-Intel layout: main volume -> FV image file -> LZMA section -> volume -> logo file.
 	img := makeBMP(120, 80, true) // noisy, so the recompressed volume has to grow
 	inner := buildVolume(t, 0x10000, 0xFF, otherFile(t, 40, 0xFF), rawLogoFile(t, makeBMP(8, 8, false), 0xFF))
-	payload, err := lzmaCompress(NewSection(SectionFVImage, inner), lzmaParams{lzmaDefaultProps, lzmaDefaultDict})
-	if err != nil {
-		t.Fatal(err)
-	}
-	fvFile, err := BuildFile(MustParseGUID("9E21FD93-9C72-4C15-8C4B-E77F1DB2D792"), FileTypeFVImage, ffsAttribChecksum,
-		newGuidedSection(LZMASectionGUID, guidedProcessingRequired, payload), 0xFF)
-	if err != nil {
-		t.Fatal(err)
-	}
 	other := otherFile(t, 30, 0xFF)
-	fw := buildImage(buildVolume(t, 0x40000, 0xFF, other, fvFile))
-	out, changes, err := ReplaceLogo(fw, img, LogoFileGUID, ReplaceOptions{})
-	if err != nil {
-		t.Fatal(err)
+	fw := buildImage(buildVolume(t, 0x40000, 0xFF, other, compressedVolumeFile(t, inner, ffsAttribChecksum)))
+	p := replace(t, fw, img, ReplaceOptions{})
+	if r := p.Changes[0].Recompressed; len(r) != 1 || r[0].NewSize <= r[0].File.Size {
+		t.Fatalf("expected one grown recompressed volume, got %+v", r)
 	}
-	if !strings.Contains(changes[0].Container, "recompressed") {
-		t.Fatalf("expected a container change, got %+v", changes[0])
-	}
-	logos, err := FindLogos(out, LogoFileGUID)
-	if err != nil || len(logos) != 1 || logos[0].Container == nil || !bytes.Equal(logos[0].Image, img) {
+	logos, err := FindLogos(p.Data, LogoFileGUID)
+	if err != nil || len(logos) != 1 || !logos[0].Compressed() || !bytes.Equal(logos[0].Image, img) {
 		t.Fatalf("re-read failed: %v", err)
 	}
-	if !bytes.Contains(out, other) {
+	if !bytes.Contains(p.Data, other) {
 		t.Fatal("other file in the main volume changed")
 	}
-	c := logos[0].Container
-	if !headerChecksumOK(out, c.File) || !dataChecksumOK(out, c.File) {
+	hops := logos[0].Enclosing()
+	if len(hops) != 1 || !hops[0].Compressed {
+		t.Fatalf("enclosing files %+v", hops)
+	}
+	if f := hops[0].File; !headerChecksumOK(p.Data, f) || !dataChecksumOK(p.Data, f) {
 		t.Fatal("checksum of the rebuilt FV image file is invalid")
 	}
 }
 
-func TestExplorerFindsLogoInCompressedVolume(t *testing.T) {
+func TestTreeFindsLogoInCompressedVolume(t *testing.T) {
 	inner := buildVolume(t, 0x10000, 0xFF, otherFile(t, 40, 0xFF), lzmaLogoFile(t, makeBMP(16, 8, false), 0xFF))
-	payload, err := lzmaCompress(NewSection(SectionFVImage, inner), lzmaParams{lzmaDefaultProps, lzmaDefaultDict})
-	if err != nil {
-		t.Fatal(err)
-	}
-	fvFile, err := BuildFile(MustParseGUID("9E21FD93-9C72-4C15-8C4B-E77F1DB2D792"), FileTypeFVImage, 0,
-		newGuidedSection(LZMASectionGUID, guidedProcessingRequired, payload), 0xFF)
-	if err != nil {
-		t.Fatal(err)
-	}
-	e := NewExplorer(buildImage(buildVolume(t, 0x40000, 0xFF, fvFile)))
-	root := e.Root()
-	if len(root.Children) != 2 || root.Children[0].Kind != "region" || root.Children[1].Kind != "volume" {
+	root := Parse(buildImage(buildVolume(t, 0x40000, 0xFF, compressedVolumeFile(t, inner, 0))))
+	if len(root.Children) != 2 || root.Children[0].Kind != KindRegion || root.Children[1].Kind != KindVolume {
 		t.Fatalf("unexpected top level: %+v", root.Children)
 	}
-	if !root.HasLogo {
-		t.Fatal("root not marked as containing the logo")
+	logos, err := root.FindLogos(LogoFileGUID)
+	if err != nil || len(logos) != 1 {
+		t.Fatalf("logos %d, %v", len(logos), err)
 	}
-	path := e.LogoPath()
-	if len(path) == 0 {
-		t.Fatal("no logo path")
-	}
-	logo := e.Node(path[len(path)-1])
-	if !logo.Logo || logo.Buffer == 0 {
-		t.Fatalf("path ends at %+v", logo)
+	path := logos[0].Node.Path()
+	if path[0] != root || !logos[0].Compressed() {
+		t.Fatalf("path does not start at the root, or is not inside decompressed data")
 	}
 	var img *Node
-	for _, c := range logo.Children {
-		for _, cc := range c.Children {
-			for _, ccc := range cc.Children {
-				if ccc.Image != "" {
-					img = ccc
-				}
-			}
+	logos[0].Node.Walk(func(n *Node) bool {
+		if _, _, ok := n.Image(); ok {
+			img = n
 		}
+		return true
+	})
+	if img == nil {
+		t.Fatal("image section not found")
 	}
-	if img == nil || img.Image != "BMP" || !bytes.Equal(e.Bytes(img.ID, img.ImageOffset, 2), []byte("BM")) {
-		t.Fatalf("image section not found or unreadable: %+v", img)
+	if info, off, _ := img.Image(); info.Format != "BMP" || !bytes.Equal(img.Bytes()[off:off+2], []byte("BM")) {
+		t.Fatalf("image section unreadable: %+v", info)
 	}
 }
 
-func TestDetectEmbeddedSignature(t *testing.T) {
-	block := append(append(append([]byte{}, AMICapsuleGUID[:]...), make([]byte, 24)...), CertRSA2048GUID[:]...)
-	fw := append(buildImage(buildVolume(t, 0x2000, 0xFF, otherFile(t, 10, 0xFF))), block...)
-	c := DetectCapsule(fw)
-	if c == nil || !c.Signed || c.HeaderSize != 0 {
-		t.Fatalf("embedded signature not detected: %+v", c)
+func TestLargeCompressedSectionsAreLazy(t *testing.T) {
+	big := otherFile(t, lazyThreshold/3+1000, 0xFF) // over 1 MiB once decompressed
+	inner := buildVolume(t, alignUp(len(big)+0x1000, 0x1000), 0xFF, big)
+	root := Parse(buildImage(buildVolume(t, 0x40000, 0xFF, compressedVolumeFile(t, inner, 0))))
+	var lzma *Node
+	root.Walk(func(n *Node) bool {
+		if _, ok := n.LZMAHeader(); ok {
+			lzma = n
+		}
+		return true
+	})
+	if lzma == nil || !lzma.Lazy() || len(lzma.Children) != 0 {
+		t.Fatal("large LZMA section was decompressed eagerly")
+	}
+	if err := lzma.Expand(); err != nil || lzma.Lazy() || len(lzma.Children) != 1 || !lzma.Children[0].Decompressed() {
+		t.Fatalf("expand: %v", err)
 	}
 }
 
@@ -415,21 +412,18 @@ func TestReplaceShiftsFollowingFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	fw := buildImage(buildVolume(t, 0x2000, 0xFF, rawLogoFile(t, old, 0xFF), follower))
-	out, changes, err := ReplaceLogo(fw, img, LogoFileGUID, ReplaceOptions{})
-	if err != nil {
-		t.Fatal(err)
+	p := replace(t, fw, img, ReplaceOptions{})
+	l := checkVolume(t, p.Data, img)
+	if p.Changes[0].Placement != PlacedShifted {
+		t.Fatalf("unexpected placement %+v", p.Changes[0])
 	}
-	l := checkVolume(t, out, img)
-	if !strings.Contains(changes[0].Placement, "following files moved") {
-		t.Fatalf("unexpected placement %+v", changes[0])
-	}
-	files, _, _ := l.Volume.Files(out)
+	files, _, _ := l.Volume.Files(p.Data)
 	for _, f := range files {
 		if f.GUID == MustParseGUID("FFCFC736-9DD8-4C63-ABDD-6DFB301799DF") {
 			if (f.DataOffset()-l.Volume.Offset)%16 != 0 {
 				t.Fatalf("moved file data at %#x is not 16-byte aligned", f.DataOffset())
 			}
-			if !bytes.Equal(out[f.Offset:f.End()], follower) {
+			if !bytes.Equal(p.Data[f.Offset:f.End()], follower) {
 				t.Fatal("moved file changed")
 			}
 			return
@@ -443,26 +437,69 @@ func TestReplaceCompressesUncompressedLogoThatDoesNotFit(t *testing.T) {
 	// then wrapped in an LZMA section instead of failing.
 	img := makeBMP(100, 100, false) // ~30 KB raw, compresses well
 	fw := buildImage(buildVolume(t, 0x2000, 0xFF, rawLogoFile(t, makeBMP(8, 8, false), 0xFF)))
-	out, changes, err := ReplaceLogo(fw, img, LogoFileGUID, ReplaceOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if l := checkVolume(t, out, img); l.Encoding != EncodingLZMA {
+	p := replace(t, fw, img, ReplaceOptions{})
+	if l := checkVolume(t, p.Data, img); l.Encoding != EncodingLZMA {
 		t.Fatalf("encoding %v, want LZMA", l.Encoding)
 	}
-	if !strings.Contains(changes[0].Storage, "original was uncompressed") {
-		t.Fatalf("storage %q", changes[0].Storage)
+	if p.Changes[0].Storage != StoredLZMAFallback {
+		t.Fatalf("storage %v", p.Changes[0].Storage)
 	}
-	if _, _, err := ReplaceLogo(fw, img, LogoFileGUID, ReplaceOptions{NoCompress: true}); err == nil {
-		t.Fatal("-no-compress must not fall back to compression")
+	if _, err := ReplaceLogo(fw, img, LogoFileGUID, ReplaceOptions{NoCompress: true}); !errors.Is(err, errTooBig) {
+		t.Fatalf("-no-compress must not fall back to compression, got %v", err)
 	}
 }
 
 func TestReplaceTooBig(t *testing.T) {
 	fw := buildImage(buildVolume(t, 0x2000, 0xFF, rawLogoFile(t, makeBMP(8, 8, false), 0xFF)))
-	_, _, err := ReplaceLogo(fw, makeBMP(100, 100, true), LogoFileGUID, ReplaceOptions{})
-	if err == nil || !strings.Contains(err.Error(), "only") {
+	_, err := ReplaceLogo(fw, makeBMP(100, 100, true), LogoFileGUID, ReplaceOptions{})
+	if !errors.Is(err, errTooBig) {
 		t.Fatalf("expected size error, got %v", err)
+	}
+}
+
+// TestCapacityIsExact checks that a file of exactly Capacity bytes can be placed and that
+// nothing larger can, for each placement strategy.
+func TestCapacityIsExact(t *testing.T) {
+	follower, err := BuildFile(MustParseGUID("FFCFC736-9DD8-4C63-ABDD-6DFB301799DF"), FileTypeFreeform, 0x08,
+		NewSection(SectionRaw, bytes.Repeat([]byte{0x42}, 1000)), 0xFF)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logo := rawLogoFile(t, makeBMP(20, 20, true), 0xFF)
+	for name, vol := range map[string][]byte{
+		"last":    buildVolume(t, 0x4000, 0xFF, otherFile(t, 30, 0xFF), logo),
+		"move":    buildVolume(t, 0x8000, 0xFF, logo, otherFile(t, 30, 0xFF)),
+		"shift":   buildVolume(t, 0x2000, 0xFF, logo, follower),
+		"no room": buildVolume(t, alignUp(0x48+len(logo), 8)+len(follower)+8, 0xFF, logo, follower),
+	} {
+		t.Run(name, func(t *testing.T) {
+			logos, err := FindLogos(buildImage(vol), LogoFileGUID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			l := logos[0]
+			s, err := newVolumeSlot(l.Node.Buf.Data, l.Volume, l.File)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.plan(l.Capacity); err != nil {
+				t.Fatalf("capacity %d does not fit: %v", l.Capacity, err)
+			}
+			for size := l.Capacity + 1; size < l.Capacity+512; size++ {
+				if pl, err := s.plan(size); err == nil {
+					t.Fatalf("capacity %d, but %d fits (%v)", l.Capacity, size, pl.placement)
+				}
+			}
+		})
+	}
+}
+
+func TestDetectEmbeddedSignature(t *testing.T) {
+	block := append(append(append([]byte{}, AMICapsuleGUID[:]...), make([]byte, 24)...), CertRSA2048GUID[:]...)
+	fw := append(buildImage(buildVolume(t, 0x2000, 0xFF, otherFile(t, 10, 0xFF))), block...)
+	c := DetectCapsule(fw)
+	if c == nil || !c.Signed || c.HeaderSize != 0 {
+		t.Fatalf("embedded signature not detected: %+v", c)
 	}
 }
 
@@ -515,11 +552,11 @@ func TestRealFirmware(t *testing.T) {
 		t.Fatal(err)
 	}
 	img := makeBMP(320, 200, false)
-	out, _, err := ReplaceLogo(fw, img, LogoFileGUID, ReplaceOptions{})
+	p, err := ReplaceLogo(fw, img, LogoFileGUID, ReplaceOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	again, err := FindLogos(out, LogoFileGUID)
+	again, err := FindLogos(p.Data, LogoFileGUID)
 	if err != nil || len(again) != len(logos) || !bytes.Equal(again[0].Image, img) {
 		t.Fatalf("re-read failed: %v", err)
 	}

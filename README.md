@@ -21,15 +21,16 @@ There is also a command-line tool:
 $ biosimage info A5766.CAP
 File:     A5766.CAP (33558528 bytes)
 Capsule:  AMI Aptio capsule, 0x1000-byte header
-Signed:   YES (AMI Aptio capsule). A patched file can only be flashed with a method that skips
-          the signature check: USB BIOS FlashBack, Flash BIOS Button, Q-Flash Plus or an
-          SPI programmer. The BIOS's own updater (EZ Flash, M-Flash, Q-Flash, Instant Flash)
-          will reject it.
+Signed:   YES (AMI Aptio capsule)
+          A patched file can only be flashed with a method that skips the signature check:
+          ASUS USB BIOS FlashBack, MSI Flash BIOS Button, Gigabyte Q-Flash Plus or an SPI
+          programmer. The BIOS's own updater (ASUS EZ Flash, MSI M-Flash, Gigabyte
+          Q-Flash, ASRock Instant Flash) rejects it because it no longer matches the
+          signature.
 Volumes:  5 top-level firmware volume(s)
 
 Logo 1:   file 7BB28B99-61BB-11D5-9A5D-0090273FC14D at 0x1b830a0 (4729 bytes) in volume at 0x1b81000 (256 KiB)
-  Stored:   LZMA-compressed section
-  Name:     Logo.bmp
+  Stored:   LZMA section → RAW (Logo.bmp)
   Image:    BMP 672x378, 24 bpp, 762104 bytes
   Capacity: up to 253792 bytes for a replacement file
 
@@ -206,7 +207,9 @@ go run ./cmd/buildweb -serve    # builds web/biosimage.wasm and serves http://lo
 Pushing a `v*` tag runs GoReleaser, which publishes the CLI binaries plus `biosimage.wasm`
 and `wasm_exec.js` as release assets. The Pages workflow then deploys `web/` together with
 the WebAssembly module of the latest release (it also runs when `web/` changes on `main`).
-Enable it once under *Settings → Pages → Source: GitHub Actions*.
+Enable it once under *Settings → Pages → Source: GitHub Actions*. A change to the JavaScript
+API of [`cmd/wasm`](cmd/wasm) needs a new release to go with it: until then the deployed page
+pairs the new `web/` with the previous release's module.
 
 ## License
 

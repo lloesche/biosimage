@@ -23,9 +23,6 @@ type Volume struct {
 	FileSystem GUID
 	Attributes uint32
 	DataOffset int // first file
-	// Parents lists the files (outermost first) that contain this volume; empty for a
-	// top-level volume.
-	Parents []File
 }
 
 // End returns the offset just past the volume.
@@ -113,54 +110,4 @@ func FindVolumes(buf []byte) []*Volume {
 		}
 		pos = sig + 1
 	}
-}
-
-// AllVolumes returns the top-level volumes and, recursively, the uncompressed volumes nested
-// inside their files: a RAW file whose contents are a volume (AMI keeps the logo in one of
-// these), or a firmware-volume file with a plain FV image section. Volumes inside compressed
-// sections are not included.
-func AllVolumes(buf []byte) []*Volume {
-	var all []*Volume
-	var walk func(v *Volume)
-	walk = func(v *Volume) {
-		all = append(all, v)
-		files, _, err := v.Files(buf)
-		if err != nil {
-			return
-		}
-		for _, f := range files {
-			for _, off := range nestedVolumeOffsets(buf, f) {
-				nv, err := ParseVolume(buf, off)
-				if err != nil || nv.End() > f.End() {
-					continue
-				}
-				nv.Parents = append(append([]File(nil), v.Parents...), f)
-				walk(nv)
-			}
-		}
-	}
-	for _, v := range FindVolumes(buf) {
-		walk(v)
-	}
-	return all
-}
-
-func nestedVolumeOffsets(buf []byte, f File) []int {
-	switch f.Type {
-	case FileTypeRaw:
-		return []int{f.DataOffset()}
-	case FileTypeFVImage:
-		secs, err := ParseSections(buf[f.DataOffset():f.End()])
-		if err != nil {
-			return nil
-		}
-		var offs []int
-		for _, s := range secs {
-			if s.Type == SectionFVImage {
-				offs = append(offs, f.DataOffset()+s.Offset+s.HeaderSize)
-			}
-		}
-		return offs
-	}
-	return nil
 }

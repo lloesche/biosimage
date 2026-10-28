@@ -150,3 +150,9 @@ func sum8(b []byte) byte {
 }
 
 func alignUp(n, a int) int { return (n + a - 1) / a * a }
+
+// Alignment is the required alignment of the file's data, in bytes.
+func (f File) Alignment() int { return dataAlignment(f.Attributes) }
+
+// HasDataChecksum reports whether the file's header carries a checksum of its data.
+func (f File) HasDataChecksum() bool { return f.Attributes&ffsAttribChecksum != 0 }

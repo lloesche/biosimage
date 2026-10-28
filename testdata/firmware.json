@@ -30,7 +30,7 @@
       "fileOffset": 602272,
       "encoding": "LZMA-compressed section",
       "image": "BMP 672x378",
-      "capacity": 82936
+      "capacity": 151304
     }
   },
   {
@@ -115,14 +115,14 @@
       "fileOffset": 16609464,
       "encoding": "LZMA-compressed section",
       "image": "BMP 409x307",
-      "capacity": 40712,
+      "capacity": 62880,
       "inCompressedVolume": true
     }
   },
   {
     "board": "MAG Z890 TOMAHAWK WIFI",
     "expect": {
-      "capacity": 29776,
+      "capacity": 37176,
       "encoding": "LZMA-compressed section",
       "fileOffset": 27751616,
       "image": "BMP 409x307",
@@ -140,7 +140,7 @@
   {
     "board": "B450 TOMAHAWK MAX",
     "expect": {
-      "capacity": 79064,
+      "capacity": 80056,
       "encoding": "LZMA-compressed section",
       "fileOffset": 10875272,
       "image": "JPEG 409x307",
@@ -158,7 +158,7 @@
   {
     "board": "MPG Z490 GAMING EDGE WIFI",
     "expect": {
-      "capacity": 195544,
+      "capacity": 232128,
       "encoding": "LZMA-compressed section",
       "fileOffset": 15196936,
       "image": "BMP 409x307",
@@ -278,7 +278,7 @@
   {
     "board": "B650M-SILVER",
     "expect": {
-      "capacity": 395632,
+      "capacity": 397400,
       "encoding": "LZMA-compressed section",
       "fileOffset": 22417520,
       "image": "JPEG 1024x768",
@@ -330,7 +330,7 @@
   {
     "board": "Z790 DARK K|NGP|N",
     "expect": {
-      "capacity": 49040,
+      "capacity": 50752,
       "encoding": "uncompressed section",
       "fileOffset": 16356520,
       "image": "JPEG 1024x768",

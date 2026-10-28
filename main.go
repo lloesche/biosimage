@@ -116,14 +116,11 @@ func cmdInfo(w io.Writer, args []string) error {
 	if c != nil && c.HeaderSize > 0 {
 		fmt.Fprintf(w, "Capsule:  %s, %#x-byte header\n", c.Kind, c.HeaderSize)
 	}
+	signed := "no"
 	if c != nil && c.Signed {
-		fmt.Fprintf(w, "Signed:   YES (%s). A patched file can only be flashed with a method that skips\n", c.Kind)
-		fmt.Fprintln(w, "          the signature check: USB BIOS FlashBack, Flash BIOS Button, Q-Flash Plus or an")
-		fmt.Fprintln(w, "          SPI programmer. The BIOS's own updater (EZ Flash, M-Flash, Q-Flash, Instant Flash)")
-		fmt.Fprintln(w, "          will reject it.")
-	} else {
-		fmt.Fprintln(w, "Signed:   no signature detected; your usual BIOS update method should accept a patched file")
+		signed = "YES (" + c.Kind + ")"
 	}
+	fmt.Fprintf(w, "Signed:   %s\n%s\n", signed, wrap(c.FlashNote(), "          ", 90))
 	fmt.Fprintf(w, "Volumes:  %d top-level firmware volume(s)\n", len(uefi.FindVolumes(buf)))
 	logos, err := uefi.FindLogos(buf, guid)
 	if err != nil {
@@ -132,21 +129,15 @@ func cmdInfo(w io.Writer, args []string) error {
 	for i, l := range logos {
 		fmt.Fprintf(w, "\nLogo %d:   file %s at %#x (%d bytes) in volume at %#x (%d KiB)\n",
 			i+1, l.File.GUID, l.File.Offset, l.File.Size, l.Volume.Offset, l.Volume.Length>>10)
-		if c := l.Container; c != nil {
-			fmt.Fprintf(w, "  Inside:   LZMA-compressed volume in file %s at %#x (%d bytes); offsets above are within it\n",
-				c.File.GUID, c.File.Offset, c.File.Size)
-		} else if n := len(l.Volume.Parents); n > 0 {
-			p := l.Volume.Parents[n-1]
-			fmt.Fprintf(w, "  Inside:   file %s at %#x\n", p.GUID, p.Offset)
+		for _, h := range l.Enclosing() {
+			if h.Compressed {
+				fmt.Fprintf(w, "  Inside:   LZMA-compressed volume in file %s at %#x (%d bytes); the offsets above are within it\n",
+					h.File.GUID, h.File.Offset, h.File.Size)
+			} else {
+				fmt.Fprintf(w, "  Inside:   file %s at %#x\n", h.File.GUID, h.File.Offset)
+			}
 		}
-		enc := l.Encoding.String()
-		if l.Detail != "" {
-			enc += ": " + l.Detail
-		}
-		fmt.Fprintf(w, "  Stored:   %s\n", enc)
-		if l.Name != "" {
-			fmt.Fprintf(w, "  Name:     %s\n", l.Name)
-		}
+		fmt.Fprintf(w, "  Stored:   %s\n", l.Storage())
 		if l.Image != nil {
 			if info, err := uefi.InspectImage(l.Image); err == nil {
 				fmt.Fprintf(w, "  Image:    %s %dx%d, %s, %d bytes\n", info.Format, info.Width, info.Height, info.Detail, len(l.Image))
@@ -248,28 +239,42 @@ func cmdReplace(w io.Writer, args []string) error {
 	if err != nil {
 		return err
 	}
-	patched, changes, err := uefi.ReplaceLogo(buf, img, guid, uefi.ReplaceOptions{NoCompress: *noCompress})
+	p, err := uefi.ReplaceLogo(buf, img, guid, uefi.ReplaceOptions{NoCompress: *noCompress})
 	if err != nil {
 		return err
 	}
-	for _, c := range changes {
+	for _, c := range p.Changes {
 		fmt.Fprintf(w, "Logo:   volume %#x: file at %#x, %d -> %d bytes, %s, %s\n",
 			c.VolumeOffset, c.NewOffset, c.OldSize, c.NewSize, c.Storage, c.Placement)
-		if c.Container != "" {
-			fmt.Fprintf(w, "        %s\n", c.Container)
+		for _, r := range c.Recompressed {
+			fmt.Fprintf(w, "        %s\n", r)
 		}
 	}
-	if err := os.WriteFile(dst, patched, 0o644); err != nil {
+	if err := os.WriteFile(dst, p.Data, 0o644); err != nil {
 		return err
 	}
 	fmt.Fprintf(w, "wrote %s (verified)\n", dst)
 	if c := uefi.DetectCapsule(buf); c != nil && c.Signed {
-		fmt.Fprintln(w, "\nnote: the input is signed. The modified file no longer matches its signature, so the")
-		fmt.Fprintln(w, "BIOS's built-in updater (ASUS EZ Flash, MSI M-Flash, Gigabyte Q-Flash, ...) will reject it.")
-		fmt.Fprintln(w, "Flash it with a method that skips verification, such as ASUS USB BIOS FlashBack, MSI")
-		fmt.Fprintln(w, "Flash BIOS Button or Gigabyte Q-Flash Plus.")
+		fmt.Fprintf(w, "\nnote: the input is signed (%s).\n%s\n", c.Kind, wrap(c.FlashNote(), "", 90))
 	}
 	return nil
+}
+
+// wrap breaks text into lines of at most width characters, each starting with indent.
+func wrap(text, indent string, width int) string {
+	var lines []string
+	line := indent
+	for _, word := range strings.Fields(text) {
+		if len(line) > len(indent) && len(line)+1+len(word) > width {
+			lines = append(lines, line)
+			line = indent
+		}
+		if len(line) > len(indent) {
+			line += " "
+		}
+		line += word
+	}
+	return strings.Join(append(lines, line), "\n")
 }
 
 func absPath(p string) string {

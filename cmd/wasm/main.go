@@ -21,7 +21,6 @@ func main() {
 	api.Set("explore", export(explore))
 	api.Set("expandNode", export(expandNode))
 	api.Set("nodeBytes", export(nodeBytes))
-	api.Set("logoPath", export(logoPath))
 	api.Set("closeExplorer", export(closeExplorer))
 	js.Global().Set("biosimage", api)
 	select {}
@@ -62,31 +61,37 @@ func imageInfo(info *uefi.ImageInfo) map[string]any {
 	}
 }
 
-// inspectFirmware(firmware) -> {size, volumes, capsule?, logos?, error?}
+// inspectFirmware(firmware) -> {size, volumes, flashNote, capsule?, logos?, error?}
 func inspectFirmware(args []js.Value) map[string]any {
 	fw := bytesFrom(args[0])
-	res := map[string]any{"size": len(fw), "volumes": len(uefi.FindVolumes(fw))}
-	if c := uefi.DetectCapsule(fw); c != nil {
+	root := uefi.Parse(fw)
+	res := map[string]any{"size": len(fw), "volumes": len(uefi.FindVolumes(fw)), "flashNote": root.Capsule.FlashNote()}
+	if c := root.Capsule; c != nil {
 		res["capsule"] = map[string]any{"kind": c.Kind, "headerSize": c.HeaderSize, "signed": c.Signed}
 	}
-	logos, err := uefi.FindLogos(fw, uefi.LogoFileGUID)
+	logos, err := root.FindLogos(uefi.LogoFileGUID)
 	if err != nil {
 		res["error"] = err.Error()
 		return res
 	}
-	list := make([]any, 0, len(logos))
-	for _, l := range logos {
+	res["logos"] = logosJS(logos)
+	return res
+}
+
+func logosJS(logos []*uefi.Logo) []any {
+	list := make([]any, len(logos))
+	for i, l := range logos {
+		enclosing := make([]any, 0)
+		for _, h := range l.Enclosing() {
+			enclosing = append(enclosing, map[string]any{
+				"guid": h.File.GUID.String(), "fileOffset": h.File.Offset, "fileSize": h.File.Size, "compressed": h.Compressed,
+			})
+		}
 		m := map[string]any{
 			"guid": l.File.GUID.String(), "fileOffset": l.File.Offset, "fileSize": l.File.Size,
 			"volumeOffset": l.Volume.Offset, "volumeLength": l.Volume.Length,
-			"encoding": l.Encoding.String(), "detail": l.Detail, "name": l.Name, "capacity": l.Capacity,
-			"header": bytesTo(l.Header(fw, 64)),
-		}
-		if c := l.Container; c != nil {
-			m["container"] = map[string]any{"guid": c.File.GUID.String(), "fileOffset": c.File.Offset, "fileSize": c.File.Size}
-		} else if n := len(l.Volume.Parents); n > 0 {
-			p := l.Volume.Parents[n-1]
-			m["parent"] = map[string]any{"guid": p.GUID.String(), "fileOffset": p.Offset}
+			"storage": l.Storage(), "name": l.Name, "capacity": l.Capacity,
+			"compressed": l.Compressed(), "enclosing": enclosing, "header": bytesTo(l.Header(64)),
 		}
 		if l.Image != nil {
 			m["image"] = bytesTo(l.Image)
@@ -94,10 +99,9 @@ func inspectFirmware(args []js.Value) map[string]any {
 				m["imageInfo"] = imageInfo(info)
 			}
 		}
-		list = append(list, m)
+		list[i] = m
 	}
-	res["logos"] = list
-	return res
+	return list
 }
 
 // inspectImage(image) -> {format, ext, width, height, detail, warnings} | {error}
@@ -109,52 +113,41 @@ func inspectImage(args []js.Value) map[string]any {
 	return imageInfo(info)
 }
 
-// replaceLogo(firmware, image, {noCompress}) -> {data, changes} | {error}
+// replaceLogo(firmware, image, {noCompress}) -> {data, changes, logos} | {error}
+//
+// logos are read back from the patched file by a fresh parse, as for inspectFirmware.
 func replaceLogo(args []js.Value) map[string]any {
 	fw, img := bytesFrom(args[0]), bytesFrom(args[1])
 	var opt uefi.ReplaceOptions
 	if len(args) > 2 && args[2].Truthy() {
 		opt.NoCompress = args[2].Get("noCompress").Truthy()
 	}
-	out, changes, err := uefi.ReplaceLogo(fw, img, uefi.LogoFileGUID, opt)
+	p, err := uefi.ReplaceLogo(fw, img, uefi.LogoFileGUID, opt)
 	if err != nil {
 		return map[string]any{"error": err.Error()}
 	}
-	list := make([]any, len(changes))
-	for i, c := range changes {
+	list := make([]any, len(p.Changes))
+	for i, c := range p.Changes {
+		recompressed := make([]any, len(c.Recompressed))
+		for j, r := range c.Recompressed {
+			recompressed[j] = r.String()
+		}
 		list[i] = map[string]any{
 			"volumeOffset": c.VolumeOffset, "oldOffset": c.OldOffset, "newOffset": c.NewOffset,
-			"oldSize": c.OldSize, "newSize": c.NewSize, "placement": c.Placement, "storage": c.Storage,
-			"container": c.Container,
+			"oldSize": c.OldSize, "newSize": c.NewSize, "placement": c.Placement.String(), "storage": c.Storage.String(),
+			"recompressed": recompressed,
 		}
 	}
-	return map[string]any{"data": bytesTo(out), "changes": list}
+	return map[string]any{"data": bytesTo(p.Data), "changes": list, "logos": logosJS(p.Logos)}
 }
 
 // Explorers keep a parsed image (and the sections decompressed so far) between calls.
 var (
-	explorers    = map[int]*uefi.Explorer{}
+	explorers    = map[int]*explorer{}
 	nextExplorer = 1
 )
 
-func nodeJS(n *uefi.Node) map[string]any {
-	info := make([]any, len(n.Info))
-	for i, kv := range n.Info {
-		info[i] = []any{kv[0], kv[1]}
-	}
-	children := make([]any, len(n.Children))
-	for i, c := range n.Children {
-		children[i] = nodeJS(c)
-	}
-	return map[string]any{
-		"id": n.ID, "kind": n.Kind, "name": n.Name, "type": n.Type, "guid": n.GUID,
-		"offset": n.Offset, "size": n.Size, "buffer": n.Buffer, "info": info,
-		"logo": n.Logo, "hasLogo": n.HasLogo, "image": n.Image, "imageOffset": n.ImageOffset,
-		"lazy": n.Lazy, "children": children,
-	}
-}
-
-func explorerArg(args []js.Value) (*uefi.Explorer, map[string]any) {
+func explorerArg(args []js.Value) (*explorer, map[string]any) {
 	e := explorers[args[0].Int()]
 	if e == nil {
 		return nil, map[string]any{"error": "unknown explorer"}
@@ -162,13 +155,18 @@ func explorerArg(args []js.Value) (*uefi.Explorer, map[string]any) {
 	return e, nil
 }
 
-// explore(firmware) -> {id, root}
+// explore(firmware) -> {id, root, logoPath}
 func explore(args []js.Value) map[string]any {
-	e := uefi.NewExplorer(bytesFrom(args[0]))
+	e := newExplorer(bytesFrom(args[0]))
 	id := nextExplorer
 	nextExplorer++
 	explorers[id] = e
-	return map[string]any{"id": id, "root": nodeJS(e.Root())}
+	root := e.nodeJS(view{n: e.root}, true)
+	path := make([]any, 0)
+	for _, id := range e.logoPath() {
+		path = append(path, id)
+	}
+	return map[string]any{"id": id, "root": root, "logoPath": path}
 }
 
 // expandNode(explorer, node) -> node with children (decompressing lazy sections)
@@ -177,11 +175,11 @@ func expandNode(args []js.Value) map[string]any {
 	if e == nil {
 		return errRes
 	}
-	n, err := e.Expand(args[1].Int())
+	n, err := e.expand(args[1].Int())
 	if err != nil {
 		return map[string]any{"error": err.Error()}
 	}
-	return nodeJS(n)
+	return n
 }
 
 // nodeBytes(explorer, node, offset, length) -> {data}
@@ -190,21 +188,7 @@ func nodeBytes(args []js.Value) map[string]any {
 	if e == nil {
 		return errRes
 	}
-	return map[string]any{"data": bytesTo(e.Bytes(args[1].Int(), args[2].Int(), args[3].Int()))}
-}
-
-// logoPath(explorer) -> {path: [node IDs from the root to the logo file]}
-func logoPath(args []js.Value) map[string]any {
-	e, errRes := explorerArg(args)
-	if e == nil {
-		return errRes
-	}
-	path := e.LogoPath()
-	ids := make([]any, len(path))
-	for i, id := range path {
-		ids[i] = id
-	}
-	return map[string]any{"path": ids}
+	return map[string]any{"data": bytesTo(e.bytes(args[1].Int(), args[2].Int(), args[3].Int()))}
 }
 
 // closeExplorer(explorer) releases the image.

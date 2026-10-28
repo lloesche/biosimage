@@ -100,8 +100,8 @@ func checkVendorFirmware(t *testing.T, e vendorFirmware, fw []byte) {
 	if got := l.Encoding.String(); got != e.Expect.Encoding {
 		t.Errorf("encoding %q, want %q", got, e.Expect.Encoding)
 	}
-	if (l.Container != nil) != e.Expect.Compressed {
-		t.Errorf("inside compressed volume = %v, want %v", l.Container != nil, e.Expect.Compressed)
+	if l.Compressed() != e.Expect.Compressed {
+		t.Errorf("inside compressed volume = %v, want %v", l.Compressed(), e.Expect.Compressed)
 	}
 	if l.Capacity != e.Expect.Capacity {
 		t.Errorf("capacity %d, want %d", l.Capacity, e.Expect.Capacity)
@@ -115,11 +115,11 @@ func checkVendorFirmware(t *testing.T, e vendorFirmware, fw []byte) {
 	}
 
 	img := makeBMP(320, 180, false)
-	out, changes, err := ReplaceLogo(fw, img, LogoFileGUID, ReplaceOptions{})
+	p, err := ReplaceLogo(fw, img, LogoFileGUID, ReplaceOptions{})
 	if err != nil {
 		t.Fatalf("replace: %v", err)
 	}
-	again, err := FindLogos(out, LogoFileGUID)
+	again, err := FindLogos(p.Data, LogoFileGUID)
 	if err != nil || len(again) != len(logos) {
 		t.Fatalf("re-read after replace: %d logos, %v", len(again), err)
 	}
@@ -128,8 +128,11 @@ func checkVendorFirmware(t *testing.T, e vendorFirmware, fw []byte) {
 			t.Fatalf("logo at %#x does not decode to the new image", l.File.Offset)
 		}
 	}
-	for _, c := range changes {
-		t.Logf("replaced: volume %#x, file %#x, %d -> %d bytes, %s %s", c.VolumeOffset, c.NewOffset, c.OldSize, c.NewSize, c.Placement, c.Container)
+	for _, c := range p.Changes {
+		t.Logf("replaced: volume %#x, file %#x, %d -> %d bytes, %s, %s", c.VolumeOffset, c.NewOffset, c.OldSize, c.NewSize, c.Placement, c.Storage)
+		for _, r := range c.Recompressed {
+			t.Logf("  recompressed: file %s at %#x, %d -> %d bytes, %s", r.File.GUID, r.NewOffset, r.File.Size, r.NewSize, r.Placement)
+		}
 	}
 }
 

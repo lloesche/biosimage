@@ -72,3 +72,27 @@ export function initHelp() {
   document.addEventListener('mouseover', onHelpTarget);
   document.addEventListener('focusin', onHelpTarget);
 }
+
+// setupDrop calls onFile with a file dropped on zone or picked with input (Enter opens it).
+export function setupDrop(zone, input, onFile) {
+  input.addEventListener('change', () => {
+    if (input.files[0]) onFile(input.files[0]);
+    input.value = '';
+  });
+  zone.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      input.click();
+    }
+  });
+  zone.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    zone.classList.add('over');
+  });
+  zone.addEventListener('dragleave', () => zone.classList.remove('over'));
+  zone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    zone.classList.remove('over');
+    if (e.dataTransfer.files[0]) onFile(e.dataTransfer.files[0]);
+  });
+}

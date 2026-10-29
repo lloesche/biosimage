@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"image"
 	"os"
 	"strings"
 	"testing"
@@ -73,7 +74,7 @@ func otherFile(t *testing.T, n int, erase byte) []byte {
 func lzmaLogoFile(t *testing.T, img []byte, erase byte) []byte {
 	t.Helper()
 	inner := JoinSections(NewSection(SectionRaw, img), NewUISection("Logo.bmp"))
-	payload, err := lzmaCompress(inner, lzmaParams{lzmaDefaultProps, lzmaDefaultDict})
+	payload, err := lzmaCompress(inner, lzmaParams{props: lzmaDefaultProps, dict: lzmaDefaultDict}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +165,7 @@ func TestFileHeaderMatchesStockASUS(t *testing.T) {
 
 func TestLZMAFormat(t *testing.T) {
 	data := makeBMP(64, 32, false)
-	out, err := lzmaCompress(data, lzmaParams{lzmaDefaultProps, lzmaDefaultDict})
+	out, err := lzmaCompress(data, lzmaParams{props: lzmaDefaultProps, dict: lzmaDefaultDict}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +180,7 @@ func TestLZMAFormat(t *testing.T) {
 
 func TestLZMARejectsHugeDictionary(t *testing.T) {
 	// A mangled header claiming a 2 GiB dictionary must be rejected before any allocation.
-	stream, err := lzmaCompress(makeBMP(8, 8, false), lzmaParams{lzmaDefaultProps, lzmaDefaultDict})
+	stream, err := lzmaCompress(makeBMP(8, 8, false), lzmaParams{props: lzmaDefaultProps, dict: lzmaDefaultDict}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -316,7 +317,7 @@ func TestReplaceNestedVolumeUpdatesParentChecksum(t *testing.T) {
 // uses on Intel boards.
 func compressedVolumeFile(t *testing.T, inner []byte, attrs byte) []byte {
 	t.Helper()
-	payload, err := lzmaCompress(NewSection(SectionFVImage, inner), lzmaParams{lzmaDefaultProps, lzmaDefaultDict})
+	payload, err := lzmaCompress(NewSection(SectionFVImage, inner), lzmaParams{props: lzmaDefaultProps, dict: lzmaDefaultDict}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -559,5 +560,80 @@ func TestRealFirmware(t *testing.T) {
 	again, err := FindLogos(p.Data, LogoFileGUID)
 	if err != nil || len(again) != len(logos) || !bytes.Equal(again[0].Image, img) {
 		t.Fatalf("re-read failed: %v", err)
+	}
+}
+
+func TestEncodeImage(t *testing.T) {
+	img := image.NewNRGBA(image.Rect(0, 0, 64, 32))
+	for i := range img.Pix {
+		img.Pix[i] = byte(i * 7)
+	}
+	for _, format := range []string{"BMP", "JPEG", "PNG"} {
+		b, err := EncodeImage(img, format, 85)
+		if err != nil {
+			t.Fatal(err)
+		}
+		info, err := InspectImage(b)
+		if err != nil || info.Format != format || info.Width != 64 || info.Height != 32 || len(info.Warnings) != 0 {
+			t.Fatalf("%s: %+v %v", format, info, err)
+		}
+		if format == "JPEG" && string(b[6:10]) != "JFIF" {
+			t.Fatalf("JPEG without JFIF header: %x", b[:12])
+		}
+	}
+}
+
+func TestLogoFormats(t *testing.T) {
+	logo := rawLogoFile(t, makeBMP(8, 8, false), 0xFF)
+	module := append(u16le(0, 1, 5, 6, 14, 15, 27, 28, 2, 4, 7, 13, 16, 26, 29, 42), "..RDHI.."...)
+	tse := mustFile(t, tseFileGUID, 0x07, NewSection(SectionPE32, module), 0xFF)
+	for _, c := range []struct {
+		files []byte
+		want  string
+	}{
+		{logo, "BMP:current"},
+		{append(append(bytes.Clone(tse), make([]byte, alignUp(len(tse), 8)-len(tse))...), logo...), "BMP:current JPEG:detected PNG:detected"},
+	} {
+		root := Parse(buildImage(buildVolume(t, 0x4000, 0xFF, c.files)))
+		logos, err := root.FindLogos(LogoFileGUID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for _, f := range root.LogoFormats(logos) {
+			s := f.Format
+			if f.Current {
+				s += ":current"
+			}
+			if f.Detected {
+				s += ":detected"
+			}
+			got = append(got, s)
+		}
+		if strings.Join(got, " ") != c.want {
+			t.Errorf("formats %q, want %q", strings.Join(got, " "), c.want)
+		}
+	}
+}
+
+func TestLZMAProgress(t *testing.T) {
+	data := makeBMP(1000, 700, true) // ~2 MB, so progress is reported
+	last := map[string]int{}
+	Progress = func(op string, done, total int) {
+		if total != len(data) || done < last[op] || done > total {
+			t.Errorf("%s: %d of %d after %d", op, done, total, last[op])
+		}
+		last[op] = done
+	}
+	defer func() { Progress = nil }()
+	stream, err := lzmaCompress(data, lzmaParams{props: lzmaDefaultProps, dict: lzmaDefaultDict}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := lzmaDecompress(stream); err != nil {
+		t.Fatal(err)
+	}
+	if last["Compressing"] != len(data) || last["Decompressing"] != len(data) {
+		t.Fatalf("progress did not reach the end: %v", last)
 	}
 }

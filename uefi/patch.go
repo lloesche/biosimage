@@ -65,7 +65,9 @@ type Change struct {
 type Patch struct {
 	Data    []byte
 	Changes []Change
-	// Logos are the logo files read back from Data by a fresh parse.
+	// Root and Logos are the tree of Data and the logo files read back from it by a fresh
+	// parse, so that callers need not parse the patched image again.
+	Root  *Node
 	Logos []*Logo
 }
 
@@ -91,7 +93,8 @@ func ReplaceLogo(buf, img []byte, guid GUID, opt ReplaceOptions) (*Patch, error)
 		}
 		patch.Changes = append(patch.Changes, c)
 	}
-	if patch.Logos, err = verifyLogos(out, guid, img, len(logos)); err != nil {
+	patch.Root = Parse(out)
+	if patch.Logos, err = verifyLogos(patch.Root, guid, img, len(logos)); err != nil {
 		return nil, fmt.Errorf("verification failed: %w", err)
 	}
 	return patch, nil
@@ -112,10 +115,10 @@ func independent(logos []*Logo) error {
 	return nil
 }
 
-// verifyLogos parses the patched image from scratch: there must be as many logo files as
+// verifyLogos checks a fresh parse of the patched image: there must be as many logo files as
 // before, all holding img.
-func verifyLogos(out []byte, guid GUID, img []byte, want int) ([]*Logo, error) {
-	logos, err := FindLogos(out, guid)
+func verifyLogos(root *Node, guid GUID, img []byte, want int) ([]*Logo, error) {
+	logos, err := root.FindLogos(guid)
 	if err != nil {
 		return nil, err
 	}
@@ -156,7 +159,7 @@ func (p *patcher) replace(l *Logo, img []byte, opt ReplaceOptions) (Change, erro
 			// encapsulation, so wrap it in LZMA (nothing was written yet).
 			p.change.Storage = StoredLZMAFallback
 			var payload []byte
-			if payload, err = lzmaCompress(raw, lzmaParams{props: lzmaDefaultProps, dict: lzmaDefaultDict}); err == nil {
+			if payload, err = lzmaCompress(raw, lzmaParams{props: lzmaDefaultProps, dict: lzmaDefaultDict}, 0); err == nil {
 				err = p.replaceSection(l.image, newGuidedSection(LZMASectionGUID, guidedProcessingRequired, payload))
 			}
 		}
@@ -250,11 +253,11 @@ func (p *patcher) changed(n *Node) error {
 // recompress replaces the contents of LZMA section n with data, keeping its LZMA settings.
 func (p *patcher) recompress(n *Node, data []byte) error {
 	h, ok := n.LZMAHeader()
-	_, _, attrs, _ := n.GUIDDefinition()
+	_, off, attrs, _ := n.GUIDDefinition()
 	if !ok {
 		return fmt.Errorf("%w: compressed section at %#x", errNotRebuildable, n.Offset)
 	}
-	payload, err := lzmaCompress(data, lzmaParams{props: h.Props, dict: h.Dict})
+	payload, err := lzmaCompress(data, lzmaParams{props: h.Props, dict: h.Dict}, n.Size-off)
 	if err != nil {
 		return err
 	}

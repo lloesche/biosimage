@@ -11,6 +11,8 @@ import (
 const (
 	SectionCompression = 0x01
 	SectionGUIDDefined = 0x02
+	SectionPE32        = 0x10
+	SectionTE          = 0x12
 	SectionVersion     = 0x14
 	SectionUI          = 0x15
 	SectionFVImage     = 0x17

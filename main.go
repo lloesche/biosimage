@@ -112,7 +112,8 @@ func cmdInfo(w io.Writer, args []string) error {
 		return err
 	}
 	fmt.Fprintf(w, "File:     %s (%d bytes)\n", pos[0], len(buf))
-	c := uefi.DetectCapsule(buf)
+	root := uefi.Parse(buf)
+	c := root.Capsule
 	if c != nil && c.HeaderSize > 0 {
 		fmt.Fprintf(w, "Capsule:  %s, %#x-byte header\n", c.Kind, c.HeaderSize)
 	}
@@ -122,10 +123,15 @@ func cmdInfo(w io.Writer, args []string) error {
 	}
 	fmt.Fprintf(w, "Signed:   %s\n%s\n", signed, wrap(c.FlashNote(), "          ", 90))
 	fmt.Fprintf(w, "Volumes:  %d top-level firmware volume(s)\n", len(uefi.FindVolumes(buf)))
-	logos, err := uefi.FindLogos(buf, guid)
+	logos, err := root.FindLogos(guid)
 	if err != nil {
 		return err
 	}
+	var formats []string
+	for _, f := range root.LogoFormats(logos) {
+		formats = append(formats, fmt.Sprintf("%s (%s)", f.Format, f.Reason()))
+	}
+	fmt.Fprintf(w, "Formats:  %s\n", strings.Join(formats, ", "))
 	for i, l := range logos {
 		fmt.Fprintf(w, "\nLogo %d:   file %s at %#x (%d bytes) in volume at %#x (%d KiB)\n",
 			i+1, l.File.GUID, l.File.Offset, l.File.Size, l.Volume.Offset, l.Volume.Length>>10)
@@ -215,6 +221,15 @@ func cmdReplace(w io.Writer, args []string) error {
 		return usageError("refusing to overwrite the input firmware; choose another -o")
 	}
 
+	buf, err := os.ReadFile(in)
+	if err != nil {
+		return err
+	}
+	root := uefi.Parse(buf)
+	logos, err := root.FindLogos(guid)
+	if err != nil {
+		return err
+	}
 	img, err := os.ReadFile(imgPath)
 	if err != nil {
 		return err
@@ -227,6 +242,7 @@ func cmdReplace(w io.Writer, args []string) error {
 		fmt.Fprintf(w, "warning: %s: %s\n", imgPath, err)
 	} else {
 		fmt.Fprintf(w, "Image:  %s %dx%d, %s, %d bytes\n", info.Format, info.Width, info.Height, info.Detail, len(img))
+		info.CheckSupported(root.LogoFormats(logos))
 		for _, warn := range info.Warnings {
 			fmt.Fprintf(w, "warning: %s\n", warn)
 		}
@@ -235,10 +251,6 @@ func cmdReplace(w io.Writer, args []string) error {
 		}
 	}
 
-	buf, err := os.ReadFile(in)
-	if err != nil {
-		return err
-	}
 	p, err := uefi.ReplaceLogo(buf, img, guid, uefi.ReplaceOptions{NoCompress: *noCompress})
 	if err != nil {
 		return err
@@ -254,7 +266,7 @@ func cmdReplace(w io.Writer, args []string) error {
 		return err
 	}
 	fmt.Fprintf(w, "wrote %s (verified)\n", dst)
-	if c := uefi.DetectCapsule(buf); c != nil && c.Signed {
+	if c := root.Capsule; c != nil && c.Signed {
 		fmt.Fprintf(w, "\nnote: the input is signed (%s).\n%s\n", c.Kind, wrap(c.FlashNote(), "", 90))
 	}
 	return nil

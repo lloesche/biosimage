@@ -180,7 +180,7 @@ button.key:hover, button.key:focus-visible { background: var(--grey); color: var
 
 .preview { flex: 1 1 400px; min-width: 0; }
 .monitor { position: relative; aspect-ratio: 16 / 9; background: var(--black); border: 4px double var(--grey); overflow: hidden; }
-.monitor canvas { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); }
+.monitor canvas, .monitor img { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); }
 
 /* ---------- save & exit ---------- */
 
@@ -264,3 +264,15 @@ button.key:hover, button.key:focus-visible { background: var(--grey); color: var
 
 /* Facts that need attention, e.g. a signed BIOS that only FlashBack-style methods accept. */
 .rows dd.alert { color: var(--white); background: var(--red); padding: 0 6px; margin: 2px 0; }
+
+/* "Please wait" box for long operations, with a progress bar (--p) or a moving block */
+.busy { position: fixed; inset: 0; z-index: 10; display: grid; place-items: center; background: rgb(0 0 0 / 0.35); }
+.busy .dialog { background: var(--grey); color: var(--blue); border-color: var(--blue); width: min(440px, calc(100vw - 32px)); margin: 0; }
+.busy .dialog-title { color: var(--blue); }
+.busy .bar { --p: 0%; position: relative; height: 22px; margin: 8px 0 4px; overflow: hidden;
+  background: linear-gradient(90deg, var(--blue) 0 var(--p), transparent var(--p)), repeating-linear-gradient(90deg, var(--blue) 0 2px, transparent 2px 4px); }
+.busy .bar.indeterminate { background: repeating-linear-gradient(90deg, var(--blue) 0 2px, transparent 2px 4px); }
+.busy .bar.indeterminate span { position: absolute; top: 0; bottom: 0; width: 25%; background: var(--blue); animation: busy-slide 1.2s ease-in-out infinite alternate; }
+.busy-sub { min-height: 1.2em; font-size: 20px; }
+@keyframes busy-slide { from { left: 0; } to { left: 75%; } }
+@media (prefers-reduced-motion: reduce) { .busy .bar.indeterminate span { animation: none; left: 37.5%; } }

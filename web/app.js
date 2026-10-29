@@ -1,19 +1,15 @@
 // biosimage web app. Everything runs locally: the firmware parser and patcher are the Go
-// package compiled to WebAssembly (cmd/wasm), image conversion uses the browser's canvas.
+// package compiled to WebAssembly (cmd/wasm, run by worker.js), the new logo is drawn with the
+// browser's canvas. This module loads the BIOS (step 1) and patches it (step 3); editor.js is
+// the New Logo step, explorer.js the firmware explorer.
 
-import { $, MIME, clamp, el, fmtBytes, fmtNum, hex8, initHelp, objectURL, setError, setLocked, showHelp } from './ui.js';
+import { $, MIME, el, fmtBytes, fmtNum, hex8, initHelp, objectURL, setError, setLocked, setupDrop, showHelp } from './ui.js';
 import { fileHeaderView } from './hex.js';
-import { canvasToBMP, decodeImage, sizeSVG } from './image.js';
+import { blocked, initEditor, output, setDetectedFormats, setFirmware } from './editor.js';
 import { initExplorer } from './explorer.js';
 import { initNav, updateTabs } from './nav.js';
-import { emit, state } from './state.js';
-import { ready } from './wasm.js';
-
-// Firmware draws the logo unscaled; the preview shows it on a screen of this width.
-const PREVIEW_SCREEN_WIDTH = 1920;
-const MAX_W = 800;
-const MAX_H = 600;
-const DEFAULT_SIZE = [672, 378];
+import { emit, events, state } from './state.js';
+import { call } from './wasm.js';
 
 const DEFAULT_HELP =
   'Replace the boot logo in an AMI Aptio / UEFI BIOS file.\n\n' +
@@ -27,75 +23,78 @@ function outputName(name) {
   return dot > 0 ? `${name.slice(0, dot)}-logo${name.slice(dot)}` : `${name}-logo`;
 }
 
-// ---------- drop zones ----------
-
-function setupDrop(zone, input, onFile) {
-  input.addEventListener('change', () => {
-    if (input.files[0]) onFile(input.files[0]);
-    input.value = '';
-  });
-  zone.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault();
-      input.click();
-    }
-  });
-  zone.addEventListener('dragover', (e) => {
-    e.preventDefault();
-    zone.classList.add('over');
-  });
-  zone.addEventListener('dragleave', () => zone.classList.remove('over'));
-  zone.addEventListener('drop', (e) => {
-    e.preventDefault();
-    zone.classList.remove('over');
-    if (e.dataTransfer.files[0]) onFile(e.dataTransfer.files[0]);
-  });
-}
-
 // Don't let the browser navigate away when a file misses the drop zone.
 window.addEventListener('dragover', (e) => e.preventDefault());
 window.addEventListener('drop', (e) => e.preventDefault());
 
+// ---------- open images ----------
+//
+// The loaded BIOS and the patched one are open in the worker, parsed once for every use. This
+// module owns them: it announces a new one with the firmware or patched event and then closes
+// the one it replaces.
+
+let patchedId = 0;
+
+function useFirmware(id) {
+  const old = state.fwId;
+  state.fwId = id;
+  emit('firmware', id);
+  if (old) call('close', [old]);
+}
+
+function usePatched(id) {
+  const old = patchedId;
+  patchedId = id;
+  emit('patched', id);
+  if (old) call('close', [old]);
+}
+
 // ---------- step 1: firmware ----------
 
+let fwLoads = 0; // to drop results for a BIOS file that has been replaced by another one
+
 async function loadFirmware(file) {
+  const load = ++fwLoads;
   setError($('fw-error'));
   $('fw-info').hidden = true;
   invalidate();
+  let info;
   try {
-    await ready;
+    info = await call('open', [new Uint8Array(await file.arrayBuffer())], `Reading ${file.name}`);
   } catch {
+    return; // the WebAssembly module did not start; wasm.js shows why
+  }
+  if (load !== fwLoads) {
+    call('close', [info.id]);
     return;
   }
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  const info = biosimage.inspectFirmware(bytes);
+  // A file with firmware volumes can still be explored, e.g. to see why no logo was found.
+  const explorable = info.volumes > 0;
+  useFirmware(explorable ? info.id : 0);
+  if (!explorable) call('close', [info.id]);
+  setLocked('step-explore', !explorable);
   if (info.error) {
-    state.fw = null;
+    state.fwInfo = null;
     setLocked('step-img', true);
     setLocked('step-build', true);
     $('fw-drop-main').textContent = '[ Drop BIOS file here ]';
-    // A file with firmware volumes can still be explored, e.g. to see why no logo was found.
-    emit('firmware', info.volumes > 0 ? bytes : null);
-    setLocked('step-explore', info.volumes === 0);
-    setError($('fw-error'), info.volumes === 0
-      ? `${file.name} does not look like a UEFI BIOS file (no firmware volumes found).`
-      : `${file.name}: ${info.error}`);
+    setError($('fw-error'), explorable
+      ? `${file.name}: ${info.error}`
+      : `${file.name} does not look like a UEFI BIOS file (no firmware volumes found).`);
     updateTabs();
     return;
   }
-  Object.assign(state, { fw: bytes, fwName: file.name, fwInfo: info });
+  Object.assign(state, { fwName: file.name, fwInfo: info });
   $('fw-drop-main').textContent = `[ ${file.name} ]`;
   renderFirmware(file);
-  emit('firmware', bytes);
-  setLocked('step-explore', false);
-  resetSize();
+  setFirmware();
   setLocked('step-img', false);
-  if (state.source) {
-    setLocked('step-build', false);
-    render();
-  }
+  updateBuild();
   updateTabs();
   showHelp('BIOS file loaded.\n\nNext: drop the new logo image under “New Logo”.');
+  // Detecting the image decoders may decompress the whole image; it runs in the background.
+  const res = await call('logoFormats', [info.id]);
+  if (load === fwLoads && !res.error) setDetectedFormats(res.formats);
 }
 
 // container returns the innermost file holding the compressed volume a logo is in, if any.
@@ -146,123 +145,23 @@ function renderFirmware(file) {
   $('fw-info').hidden = false;
 }
 
-// ---------- step 2: image ----------
-
-async function loadImage(file) {
-  setError($('img-error'));
-  invalidate();
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  const isSVG = file.type === 'image/svg+xml' || /\.svg$/i.test(file.name);
-  let img;
-  try {
-    const blob = isSVG ? new Blob([sizeSVG(new TextDecoder().decode(bytes))], { type: 'image/svg+xml' }) : file;
-    img = await decodeImage(blob);
-  } catch {
-    setError($('img-error'), `${file.name}: your browser cannot read this image.`);
-    return;
-  }
-  const info = isSVG ? null : biosimage.inspectImage(bytes);
-  state.source = { img, bytes, name: file.name, info: info && !info.error ? info : null };
-  $('img-drop-main').textContent = `[ ${file.name} ]`;
-
-  // "File as-is" only for formats the firmware can decode.
-  const asis = document.querySelector('input[name=mode][value=asis]');
-  asis.disabled = !state.source.info;
-  if (asis.disabled && asis.checked) document.querySelector('input[name=mode][value=bmp]').checked = true;
-  const si = state.source.info;
-  $('mode-hint').textContent = !si
-    ? `${file.name}: converted to BMP.`
-    : si.format === 'GIF' && !si.detail.startsWith('1 ')
-      ? `Animated GIF (${si.detail}): choose “File as-is” to keep the animation; conversion uses the first frame.`
-      : `${file.name}: ${si.format} ${si.width}×${si.height}, ${si.detail}, ${fmtNum(bytes.length)} bytes.`;
-
-  $('editor').hidden = false;
-  if (state.fw) setLocked('step-build', false);
-  render();
-  updateTabs();
-}
-
-function mode() {
-  return document.querySelector('input[name=mode]:checked').value;
-}
-
-function resetSize() {
-  const i = state.fwInfo?.logos[0]?.imageInfo;
-  const [w, h] = i ? [i.width, i.height] : DEFAULT_SIZE;
-  $('cw').value = clamp(w, 16, MAX_W);
-  $('ch').value = clamp(h, 16, MAX_H);
-}
-
-function updateControls() {
-  const scale = $('scale');
-  scale.style.setProperty('--p', `${((scale.value - scale.min) / (scale.max - scale.min)) * 100}%`);
-  $('scale-out').textContent = `${scale.value}%`;
-  for (const id of ['ox', 'oy']) {
-    const v = Number($(id).value);
-    $(`${id}-out`).textContent = v === 0 ? 'Centre' : `${v > 0 ? '+' : ''}${v}%`;
-  }
-  $('bg-hex').textContent = $('bg').value.toUpperCase();
-}
-
-function render() {
-  updateControls();
-  const src = state.source;
-  if (!src) return;
-  const canvas = $('canvas');
-  const ctx = canvas.getContext('2d');
-  const asis = mode() === 'asis';
-  $('layout').disabled = asis;
-  if (asis) {
-    canvas.width = src.img.naturalWidth;
-    canvas.height = src.img.naturalHeight;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.drawImage(src.img, 0, 0);
-  } else {
-    const w = clamp($('cw').value, 16, MAX_W);
-    const h = clamp($('ch').value, 16, MAX_H);
-    canvas.width = w;
-    canvas.height = h;
-    ctx.fillStyle = $('bg').value;
-    ctx.fillRect(0, 0, w, h);
-    const s = Number($('scale').value) / 100;
-    const { naturalWidth: iw, naturalHeight: ih } = src.img;
-    const k = Math.min((w * s) / iw, (h * s) / ih);
-    const dw = iw * k;
-    const dh = ih * k;
-    const x = (w - dw) / 2 + (Number($('ox').value) / 100) * w;
-    const y = (h - dh) / 2 + (Number($('oy').value) / 100) * h;
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = 'high';
-    ctx.drawImage(src.img, x, y, dw, dh);
-  }
-  canvas.style.width = `${(canvas.width / PREVIEW_SCREEN_WIDTH) * 100}%`;
-  $('preview-caption').textContent = `${canvas.width}×${canvas.height} px, real size on a 1920×1080 screen`;
-  invalidate();
-  updateWarnings();
-}
-
 // ---------- step 3: build ----------
 
-function imageBytes() {
-  return mode() === 'asis' ? state.source.bytes : canvasToBMP($('canvas'));
-}
-
-function updateWarnings() {
-  const warnings = mode() === 'asis' ? state.source?.info?.warnings || [] : [];
-  const ul = $('img-warnings');
-  ul.replaceChildren(...warnings.map((w) => el('li', { textContent: w })));
-  ul.hidden = warnings.length === 0;
-  $('force-label').hidden = warnings.length === 0;
-  $('build').disabled = !state.fw || !state.source || (warnings.length > 0 && !$('force').checked);
-}
+// inputs counts changes to the BIOS file or the logo, to drop results computed for older ones.
+let inputs = 0;
 
 // invalidate drops the patched file once the inputs change.
 function invalidate() {
+  inputs++;
   $('result').hidden = true;
   state.built = false;
-  emit('patched', null);
+  if (patchedId) usePatched(0);
   setError($('build-error'));
   updateTabs();
+}
+
+function updateBuild() {
+  $('build').disabled = !state.fwInfo || !state.source || blocked();
 }
 
 async function build() {
@@ -271,17 +170,18 @@ async function build() {
   const btn = $('build');
   btn.disabled = true;
   btn.firstElementChild.textContent = 'Working…';
-  await new Promise((r) => setTimeout(r, 20)); // let the button repaint
+  const at = inputs;
   try {
     // replaceLogo verifies the result, including a fresh parse that must read back the image.
-    const res = biosimage.replaceLogo(state.fw, imageBytes());
+    const res = await call('replaceLogo', [state.fwId, await output()], 'Patching the BIOS');
     if (res.error) throw new Error(res.error);
-    showResult(res);
+    if (at === inputs) showResult(res);
+    else call('close', [res.id]);
   } catch (err) {
-    setError($('build-error'), `Could not patch the BIOS: ${err.message}`);
+    if (at === inputs) setError($('build-error'), `Could not patch the BIOS: ${err.message}`);
   } finally {
     btn.firstElementChild.textContent = 'Create Patched BIOS';
-    updateWarnings();
+    updateBuild();
   }
 }
 
@@ -306,7 +206,7 @@ function showResult(res) {
 
   renderFlashHelp();
   $('result').hidden = false;
-  emit('patched', res.data);
+  usePatched(res.id);
   state.built = true;
   updateTabs();
   $('result').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
@@ -336,21 +236,14 @@ function renderFlashHelp() {
 
 initHelp();
 initNav();
+initEditor();
 initExplorer();
 setupDrop($('fw-drop'), $('fw-input'), loadFirmware);
-setupDrop($('img-drop'), $('img-input'), loadImage);
-for (const id of ['cw', 'ch', 'bg', 'scale', 'ox', 'oy']) $(id).addEventListener('input', render);
-for (const r of document.querySelectorAll('input[name=mode]')) r.addEventListener('change', render);
-$('size-reset').addEventListener('click', () => {
-  resetSize();
-  render();
+events.addEventListener('logo', () => {
+  invalidate();
+  if (state.fwInfo && state.source) setLocked('step-build', false);
 });
-$('center').addEventListener('click', () => {
-  $('ox').value = 0;
-  $('oy').value = 0;
-  render();
-});
-$('force').addEventListener('change', updateWarnings);
+events.addEventListener('warnings', updateBuild);
 $('build').addEventListener('click', build);
 
 // Save & Download: F10 like in a real BIOS setup, plus Ctrl+S / Cmd+S because function keys
@@ -369,6 +262,5 @@ document.addEventListener('keydown', async (e) => {
 setLocked('step-img', true);
 setLocked('step-build', true);
 setLocked('step-explore', true);
-updateControls();
 updateTabs();
 showHelp(DEFAULT_HELP);

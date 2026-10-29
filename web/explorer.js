@@ -1,16 +1,19 @@
 // Firmware explorer (Norton Commander style, read-only): the structure tree on the left, details,
-// image preview and hex dump on the right. It follows the firmware and patched events and only
-// parses an image once the explorer is actually looked at.
+// image preview and hex dump on the right. It shows the images of the firmware and patched
+// events (opened in the worker, see app.js) and only fetches a tree once the explorer is
+// actually looked at.
 
 import { $, MIME, charsThatFit, el, fmtNum, hex8, objectURL } from './ui.js';
 import { hexRows } from './hex.js';
 import { events } from './state.js';
+import { call } from './wasm.js';
 
 const HEX_ROWS = 16;
 
 const nc = {
-  sources: { orig: null, patched: null }, // { id, nodes: Map, root, logoPath }
-  pending: { orig: null, patched: null }, // bytes not yet parsed
+  sources: { orig: null, patched: null }, // { id, nodes: Map, root, logoPath }; id is the image
+  pending: { orig: 0, patched: 0 }, // images whose tree has not been fetched yet
+  loading: null, // { id, promise } of the fetch in progress
   src: 'orig',
   cwd: null,
   sel: 0,
@@ -30,19 +33,14 @@ function ncIndex(src, node, parentId) {
   for (const c of node.children) ncIndex(src, c, node.id);
 }
 
-function ncClose(which) {
-  if (nc.sources[which]) biosimage.closeExplorer(nc.sources[which].id);
+// ncSetImage shows image id (0 for none) as the original or patched firmware.
+function ncSetImage(which, id) {
+  if (!id && !nc.sources[which] && !nc.pending[which]) return;
   nc.sources[which] = null;
-  nc.pending[which] = null;
-}
-
-function ncSetFirmware(which, bytes) {
-  if (!bytes && !nc.sources[which] && !nc.pending[which]) return;
-  ncClose(which);
-  nc.pending[which] = bytes;
+  nc.pending[which] = id;
   if (which === 'patched') {
-    $('nc-src-patched').disabled = !bytes;
-    if (!bytes && nc.src === 'patched') {
+    $('nc-src-patched').disabled = !id;
+    if (!id && nc.src === 'patched') {
       document.querySelector('input[name=nc-src][value=orig]').checked = true;
       nc.src = 'orig';
     }
@@ -53,15 +51,25 @@ function ncSetFirmware(which, bytes) {
   }
 }
 
-function ncEnsure() {
-  if (!ncSource() && nc.pending[nc.src]) {
-    $('nc-status').textContent = 'Reading firmware structure…';
-    const res = biosimage.explore(nc.pending[nc.src]);
-    const src = { id: res.id, nodes: new Map(), root: res.root, logoPath: res.logoPath };
-    ncIndex(src, res.root, undefined);
-    nc.sources[nc.src] = src;
-    nc.pending[nc.src] = null;
-    nc.cwd = null;
+// ncLoad fetches the tree of image id for the given source.
+async function ncLoad(which, id) {
+  $('nc-status').textContent = 'Reading firmware structure…';
+  const res = await call('explore', [id], 'Reading the firmware structure');
+  if (res.error || nc.pending[which] !== id) return; // replaced meanwhile
+  const src = { id, nodes: new Map(), root: res.root, logoPath: res.logoPath };
+  ncIndex(src, res.root, undefined);
+  nc.sources[which] = src;
+  nc.pending[which] = 0;
+  if (nc.src === which) nc.cwd = null;
+}
+
+// ncEnsure fetches the tree being shown, if that has not happened yet, and shows its root.
+async function ncEnsure() {
+  const which = nc.src;
+  const id = nc.pending[which];
+  if (id && !nc.sources[which]) {
+    if (nc.loading?.id !== id) nc.loading = { id, promise: ncLoad(which, id) };
+    await nc.loading.promise;
   }
   const src = ncSource();
   if (src && !nc.cwd) {
@@ -118,12 +126,17 @@ function ncSelect(i) {
   const rows = $('nc-list').children;
   for (let k = 0; k < rows.length; k++) rows[k].classList.toggle('sel', k === nc.sel);
   rows[nc.sel]?.scrollIntoView({ block: 'nearest' });
-  const r = nc.rows[nc.sel];
-  if (!r) return;
-  const n = r.up ? nc.cwd : r.node;
+  const n = ncSelected();
+  if (!n) return;
   nc.hexPos = 0;
   ncInfo(n);
   ncHex(n);
+}
+
+// ncSelected returns the node of the selected row (for "..", the current directory).
+function ncSelected() {
+  const r = nc.rows[nc.sel];
+  return r && (r.up ? nc.cwd : r.node);
 }
 
 // ncImageNode returns the node holding the image to preview for n: n itself, or for files and
@@ -141,7 +154,7 @@ function ncImageNode(n) {
   return null;
 }
 
-function ncInfo(n) {
+async function ncInfo(n) {
   const where = n.decompressed ? ' (in decompressed data)' : '';
   const facts = [['Kind', n.kind], ['Offset', hex8(n.offset) + where], ['Size', `${fmtNum(n.size)} bytes`]];
   if (n.guid) facts.push(['GUID', n.guid]);
@@ -156,12 +169,12 @@ function ncInfo(n) {
   $('nc-status').textContent = `${hex8(n.offset)}${where} · ${fmtNum(n.size)} bytes · ${n.type || n.kind}`;
   $('nc-preview').hidden = !img;
   if (img) {
-    const res = biosimage.nodeBytes(ncSource().id, img.id, img.imageOffset, img.size - img.imageOffset);
-    $('nc-img').src = objectURL('ncImage', res.data, MIME[img.image] || 'application/octet-stream');
+    const res = await call('nodeBytes', [ncSource().id, img.id, img.imageOffset, img.size - img.imageOffset]);
+    if (res.data && ncSelected() === n) $('nc-img').src = objectURL('ncImage', res.data, MIME[img.image] || 'application/octet-stream');
   }
 }
 
-function ncHex(n) {
+async function ncHex(n) {
   const pre = $('nc-hex');
   // 16 bytes per row (76 characters) when the panel is wide enough, else 8 (43 characters);
   // a page is always HEX_ROWS rows.
@@ -169,7 +182,9 @@ function ncHex(n) {
   const per = fit >= 76 ? 16 : 8;
   nc.hexPage = per * HEX_ROWS;
   nc.hexPos -= nc.hexPos % nc.hexPage;
-  const data = biosimage.nodeBytes(ncSource().id, n.id, nc.hexPos, nc.hexPage).data || new Uint8Array();
+  const pos = nc.hexPos;
+  const data = (await call('nodeBytes', [ncSource().id, n.id, pos, nc.hexPage])).data || new Uint8Array();
+  if (ncSelected() !== n || nc.hexPos !== pos) return; // another row or page was chosen meanwhile
   pre.replaceChildren();
   hexRows(pre, data, { base: n.offset + nc.hexPos, per, ascii: fit >= 43 });
   $('nc-hex-title').textContent = `Hex${n.decompressed ? ' (decompressed)' : ''}`;
@@ -179,9 +194,8 @@ function ncHex(n) {
 }
 
 function ncHexPage(dir) {
-  const r = nc.rows[nc.sel];
-  if (!r) return;
-  const n = r.up ? nc.cwd : r.node;
+  const n = ncSelected();
+  if (!n) return;
   const pos = nc.hexPos + dir * nc.hexPage;
   if (pos < 0 || pos >= n.size) return;
   nc.hexPos = pos;
@@ -189,34 +203,29 @@ function ncHexPage(dir) {
 }
 
 // ncExpand fetches the children of a node that is still lazy on the JavaScript side.
-function ncExpand(n) {
+async function ncExpand(n) {
   const src = ncSource();
   $('nc-status').textContent = 'Decompressing…';
-  const res = biosimage.expandNode(src.id, n.id);
+  const res = await call('expandNode', [src.id, n.id], 'Decompressing');
   if (res.error) {
     $('nc-status').textContent = `Error: ${res.error}`;
     return false;
   }
-  n.children = res.children;
-  n.lazy = false;
-  for (const c of n.children) ncIndex(src, c, n.id);
-  return true;
+  if (n.lazy) {
+    n.children = res.children;
+    n.lazy = false;
+    for (const c of n.children) ncIndex(src, c, n.id);
+  }
+  return ncSource() === src;
 }
-
-// repaint lets the browser show a status message before a long synchronous call.
-const repaint = () => new Promise((r) => setTimeout(r, 30));
 
 async function ncOpen(i) {
   const r = nc.rows[i];
   if (!r) return;
   if (r.up) return ncUp();
   const n = r.node;
-  if (n.lazy) {
-    $('nc-status').textContent = 'Decompressing…';
-    await repaint();
-    if (!ncExpand(n)) return;
-  }
-  if (!n.children.length) return;
+  if (n.lazy && !(await ncExpand(n))) return;
+  if (!n.children.length || nc.rows[nc.sel]?.node !== n) return;
   nc.cwd = n;
   nc.sel = 1;
   ncRender();
@@ -232,8 +241,8 @@ function ncUp() {
 }
 
 // ncGoLogo selects the logo file. explore returns the path to it, all of it already unpacked.
-function ncGoLogo() {
-  ncEnsure();
+async function ncGoLogo() {
+  await ncEnsure();
   const src = ncSource();
   if (!src) return;
   const logo = src.nodes.get(src.logoPath[src.logoPath.length - 1]);
@@ -276,8 +285,8 @@ function onKey(e) {
 }
 
 export function initExplorer() {
-  events.addEventListener('firmware', (e) => ncSetFirmware('orig', e.detail));
-  events.addEventListener('patched', (e) => ncSetFirmware('patched', e.detail));
+  events.addEventListener('firmware', (e) => ncSetImage('orig', e.detail));
+  events.addEventListener('patched', (e) => ncSetImage('patched', e.detail));
   $('nc-list').addEventListener('keydown', onKey);
   $('nc-list').addEventListener('focus', ncEnsure);
   $('nc-list').addEventListener('mousedown', ncEnsure);

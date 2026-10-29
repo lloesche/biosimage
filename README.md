@@ -66,7 +66,13 @@ biosimage replace [-o FILE] [-no-compress] [-force] FIRMWARE IMAGE
 ## Preparing the image
 
 AMI's setup module (AMITSE) contains decoders for BMP, JPEG, PNG and GIF and picks one by
-looking at the file's first bytes. For the most predictable result:
+looking at the file's first bytes. Which of them a vendor builds in varies: on the tested boards
+BMP, JPEG and GIF are always there, PNG only on some. `biosimage info` lists the formats a BIOS
+can show: BMP and the format of the current logo always, the others when their decoder is
+found in AMITSE (best effort, by the tables and signatures the decoders use). The web app
+offers these formats and starts with the format of the current logo; JPEG is much smaller than
+BMP, which matters where the logo is stored uncompressed or space is tight. For the most
+predictable result:
 
 - Use a **24-bit uncompressed BMP** on a black background, about the size of the original
   logo (`biosimage info` shows it). Stay at or below 800x600.
@@ -196,7 +202,9 @@ redistribute.
 ### Web app
 
 The web app in [`web/`](web) is plain HTML/CSS/JavaScript; the firmware code is the same Go
-package compiled to WebAssembly ([`cmd/wasm`](cmd/wasm)). To run it locally:
+package compiled to WebAssembly ([`cmd/wasm`](cmd/wasm)), which runs in a Web Worker
+([`web/worker.js`](web/worker.js)) so that decompressing and recompressing firmware does not
+block the page; it reports its progress to it. To run it locally:
 
 ```sh
 go run ./cmd/buildweb -serve    # builds web/biosimage.wasm and serves http://localhost:8080

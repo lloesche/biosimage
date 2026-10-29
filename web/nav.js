@@ -10,7 +10,7 @@ const ITEM_SELECTOR = 'label.drop, input:not([type=hidden]):not([type=file]), bu
 
 // The highlighted tab is the screen the cursor is on, or else the next step to do.
 export function updateTabs() {
-  const done = { fw: !!state.fw, img: !!state.source && !!state.fw, build: state.built };
+  const done = { fw: !!state.fwInfo, img: !!state.source && !!state.fwInfo, build: state.built };
   const active = state.screen || (!done.fw ? 'fw' : !done.img ? 'img' : 'build');
   for (const k of SCREENS) {
     $(`tab-${k}`).classList.toggle('done', !!done[k]);

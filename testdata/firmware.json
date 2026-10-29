@@ -13,6 +13,7 @@
       "fileOffset": 28848288,
       "encoding": "LZMA-compressed section",
       "image": "BMP 672x378",
+      "formats": "BMP JPEG PNG GIF",
       "capacity": 253792
     }
   },
@@ -30,6 +31,7 @@
       "fileOffset": 602272,
       "encoding": "LZMA-compressed section",
       "image": "BMP 672x378",
+      "formats": "BMP JPEG GIF",
       "capacity": 151304
     }
   },
@@ -47,6 +49,7 @@
       "fileOffset": 11111856,
       "encoding": "LZMA-compressed section",
       "image": "BMP 672x378",
+      "formats": "BMP JPEG PNG GIF",
       "capacity": 229968
     }
   },
@@ -57,6 +60,7 @@
       "encoding": "LZMA-compressed section",
       "fileOffset": 1482376,
       "image": "BMP 672x378",
+      "formats": "BMP JPEG PNG GIF",
       "logos": 1,
       "signed": true
     },
@@ -74,6 +78,7 @@
       "encoding": "LZMA-compressed section",
       "fileOffset": 468747,
       "image": "BMP 448x142",
+      "formats": "BMP",
       "logos": 1,
       "signed": true
     },
@@ -98,6 +103,7 @@
       "fileOffset": 16777480,
       "encoding": "LZMA-compressed section",
       "image": "BMP 409x307",
+      "formats": "BMP JPEG PNG GIF",
       "capacity": 327560
     }
   },
@@ -115,6 +121,7 @@
       "fileOffset": 16609464,
       "encoding": "LZMA-compressed section",
       "image": "BMP 409x307",
+      "formats": "BMP JPEG PNG GIF",
       "capacity": 62880,
       "inCompressedVolume": true
     }
@@ -126,6 +133,7 @@
       "encoding": "LZMA-compressed section",
       "fileOffset": 27751616,
       "image": "BMP 409x307",
+      "formats": "BMP JPEG PNG GIF",
       "inCompressedVolume": true,
       "logos": 1,
       "signed": true
@@ -144,6 +152,7 @@
       "encoding": "LZMA-compressed section",
       "fileOffset": 10875272,
       "image": "JPEG 409x307",
+      "formats": "BMP JPEG GIF",
       "inCompressedVolume": true,
       "logos": 2,
       "signed": false
@@ -162,6 +171,7 @@
       "encoding": "LZMA-compressed section",
       "fileOffset": 15196936,
       "image": "BMP 409x307",
+      "formats": "BMP JPEG GIF",
       "inCompressedVolume": true,
       "logos": 1,
       "signed": false
@@ -187,6 +197,7 @@
       "fileOffset": 6291768,
       "encoding": "LZMA-compressed section",
       "image": "BMP 293x400",
+      "formats": "BMP JPEG PNG GIF",
       "capacity": 130952
     }
   },
@@ -204,6 +215,7 @@
       "fileOffset": 17375544,
       "encoding": "LZMA-compressed section",
       "image": "JPEG 496x533",
+      "formats": "BMP JPEG PNG GIF",
       "capacity": 130952
     }
   },
@@ -214,6 +226,7 @@
       "encoding": "LZMA-compressed section",
       "fileOffset": 16777880,
       "image": "BMP 293x400",
+      "formats": "BMP JPEG PNG GIF",
       "logos": 1,
       "signed": true
     },
@@ -231,6 +244,7 @@
       "encoding": "LZMA-compressed section",
       "fileOffset": 20553848,
       "image": "JPEG 496x533",
+      "formats": "BMP JPEG PNG GIF",
       "logos": 1,
       "signed": true
     },
@@ -255,6 +269,7 @@
       "fileOffset": 16777480,
       "encoding": "LZMA-compressed section",
       "image": "JPEG 424x208",
+      "formats": "BMP JPEG PNG GIF",
       "capacity": 130952
     }
   },
@@ -265,6 +280,7 @@
       "encoding": "LZMA-compressed section",
       "fileOffset": 4657464,
       "image": "JPEG 424x208",
+      "formats": "BMP JPEG PNG GIF",
       "logos": 1,
       "signed": true
     },
@@ -282,6 +298,7 @@
       "encoding": "LZMA-compressed section",
       "fileOffset": 22417520,
       "image": "JPEG 1024x768",
+      "formats": "BMP JPEG GIF",
       "inCompressedVolume": true,
       "logos": 1,
       "signed": false
@@ -300,6 +317,7 @@
       "encoding": "LZMA-compressed section",
       "fileOffset": 16777480,
       "image": "JPEG 1440x360",
+      "formats": "BMP JPEG GIF",
       "logos": 1,
       "signed": true
     },
@@ -317,6 +335,7 @@
       "encoding": "LZMA-compressed section",
       "fileOffset": 17236232,
       "image": "JPEG 1920x1080",
+      "formats": "BMP JPEG PNG GIF",
       "logos": 1,
       "signed": true
     },
@@ -334,6 +353,7 @@
       "encoding": "uncompressed section",
       "fileOffset": 16356520,
       "image": "JPEG 1024x768",
+      "formats": "BMP JPEG PNG",
       "inCompressedVolume": true,
       "logos": 1,
       "signed": true

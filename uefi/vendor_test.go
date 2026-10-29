@@ -36,6 +36,7 @@ type vendorFirmware struct {
 		Capacity    int    `json:"capacity"`
 		Compressed  bool   `json:"inCompressedVolume"`
 		Unsupported string `json:"unsupported"`
+		Formats     string `json:"formats"`
 	} `json:"expect"`
 }
 
@@ -72,7 +73,8 @@ func TestVendorFirmware(t *testing.T) {
 }
 
 func checkVendorFirmware(t *testing.T, e vendorFirmware, fw []byte) {
-	logos, err := FindLogos(fw, LogoFileGUID)
+	root := Parse(fw)
+	logos, err := root.FindLogos(LogoFileGUID)
 	if e.Expect.Unsupported != "" {
 		if err == nil {
 			t.Fatalf("expected %q, but %d logo(s) were found: support was added, update testdata/firmware.json", e.Expect.Unsupported, len(logos))
@@ -105,6 +107,13 @@ func checkVendorFirmware(t *testing.T, e vendorFirmware, fw []byte) {
 	}
 	if l.Capacity != e.Expect.Capacity {
 		t.Errorf("capacity %d, want %d", l.Capacity, e.Expect.Capacity)
+	}
+	var formats []string
+	for _, f := range root.LogoFormats(logos) {
+		formats = append(formats, f.Format)
+	}
+	if got := strings.Join(formats, " "); got != e.Expect.Formats {
+		t.Errorf("formats %q, want %q", got, e.Expect.Formats)
 	}
 	info, err := InspectImage(l.Image)
 	if err != nil {

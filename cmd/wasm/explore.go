@@ -31,10 +31,11 @@ type view struct {
 	data *uefi.Buffer
 }
 
-func newExplorer(img []byte) *explorer {
-	e := &explorer{root: uefi.Parse(img), ids: map[view]int{}, onPath: map[*uefi.Node]bool{}}
-	// The logo search decompresses what is needed to find the logo.
-	if logos, err := e.root.FindLogos(uefi.LogoFileGUID); err == nil {
+// newExplorer presents root, in which the logo search found logos (none if it found none); that
+// search has already decompressed what is needed to reach them.
+func newExplorer(root *uefi.Node, logos []*uefi.Logo) *explorer {
+	e := &explorer{root: root, ids: map[view]int{}, onPath: map[*uefi.Node]bool{}}
+	if len(logos) > 0 {
 		e.logo = logos[0].Node
 	}
 	e.mark(e.root)

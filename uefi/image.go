@@ -13,6 +13,7 @@ type ImageInfo struct {
 	Width    int
 	Height   int
 	Detail   string
+	Frames   int // more than 1 for an animated GIF
 	Warnings []string
 }
 
@@ -41,6 +42,7 @@ func InspectImage(b []byte) (*ImageInfo, error) {
 	if err != nil {
 		return nil, err
 	}
+	info.Frames = max(info.Frames, 1)
 	if info.Width > maxLogoWidth || info.Height > maxLogoHeight {
 		info.Warnings = append(info.Warnings, fmt.Sprintf("larger than %dx%d; some firmware refuses to show such logos", maxLogoWidth, maxLogoHeight))
 	}
@@ -168,7 +170,7 @@ func inspectGIF(b []byte) (*ImageInfo, error) {
 				return nil, errors.New("truncated GIF extension")
 			}
 			if b[p+1] == 0xF9 && p+8 <= len(b) {
-				if d := binary.LittleEndian.Uint16(b[p+4:]); d > 0 && d < 10 {
+				if d := binary.LittleEndian.Uint16(b[p+4:]); d > 0 && d < MinFrameDelay {
 					fastFrames++
 				}
 			}
@@ -194,7 +196,7 @@ func inspectGIF(b []byte) (*ImageInfo, error) {
 			return nil, fmt.Errorf("unexpected GIF block %#x", b[p])
 		}
 	}
-	info.Detail = fmt.Sprintf("%d frame(s)", frames)
+	info.Detail, info.Frames = fmt.Sprintf("%d frame(s)", frames), frames
 	if frames > 1 {
 		info.Warnings = append(info.Warnings,
 			"animated: AMI firmware shows at most 10 frames/s, ignores disposal methods and loops forever; some boards show only the first frame")

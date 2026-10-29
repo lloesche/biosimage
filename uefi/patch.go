@@ -133,9 +133,20 @@ func verifyLogos(root *Node, guid GUID, img []byte, want int) ([]*Logo, error) {
 	return logos, nil
 }
 
+// StoredSize returns the size of the logo file that ReplaceLogo would write for img, how the
+// image would be stored, and an error (wrapping errTooBig) if the file would not fit into its
+// volume. Nothing is written. A compressed volume around the logo file is not rebuilt, so
+// whether that still fits is only known once ReplaceLogo has run.
+func (l *Logo) StoredSize(img []byte, opt ReplaceOptions) (int, Storage, error) {
+	p := &patcher{logo: l.Node, dry: true}
+	c, err := p.replace(l, img, opt)
+	return c.NewSize, c.Storage, err
+}
+
 // patcher rebuilds one logo file and everything that encloses it.
 type patcher struct {
 	logo   *Node
+	dry    bool               // stop once the new logo file is planned (StoredSize)
 	before map[*Buffer][]byte // buffer contents before this patch, for verification
 	change Change
 }
@@ -182,6 +193,9 @@ func (p *patcher) replace(l *Logo, img []byte, opt ReplaceOptions) (Change, erro
 // placeFile puts nf in place of file n in its volume, then propagates the change upwards.
 func (p *patcher) placeFile(n *Node, nf []byte) error {
 	vol := n.Parent
+	if n == p.logo {
+		p.change.NewSize = len(nf)
+	}
 	slot, err := newVolumeSlot(vol.Buf.Data, vol.Volume, n.File)
 	if err != nil {
 		return err
@@ -190,10 +204,13 @@ func (p *patcher) placeFile(n *Node, nf []byte) error {
 	if err != nil {
 		return fmt.Errorf("volume at %#x: %w", vol.Offset, err)
 	}
+	if p.dry { // the logo file is always the first one placed
+		return nil
+	}
 	p.snapshot(vol.Buf)
 	l.apply(vol.Buf.Data, vol.Volume.EraseByte(), nf)
 	if n == p.logo {
-		p.change.NewOffset, p.change.NewSize, p.change.Placement = l.pos, len(nf), l.placement
+		p.change.NewOffset, p.change.Placement = l.pos, l.placement
 	} else {
 		p.change.Recompressed = append(p.change.Recompressed,
 			Recompression{File: n.File, NewOffset: l.pos, NewSize: len(nf), Placement: l.placement})

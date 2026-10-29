@@ -71,15 +71,22 @@ BMP, JPEG and GIF are always there, PNG only on some. `biosimage info` lists the
 can show: BMP and the format of the current logo always, the others when their decoder is
 found in AMITSE (best effort, by the tables and signatures the decoders use). The web app
 offers these formats and starts with the format of the current logo; JPEG is much smaller than
-BMP, which matters where the logo is stored uncompressed or space is tight. For the most
-predictable result:
+BMP, which matters where the logo is stored uncompressed or space is tight. While you edit, it
+shows how much space the new logo file takes in the BIOS, stored the way the patched BIOS will
+store it, and tells you before you build if it does not fit. For the most predictable result:
 
 - Use a **24-bit uncompressed BMP** on a black background, about the size of the original
   logo (`biosimage info` shows it). Stay at or below 800x600.
 - PNG: 8- or 16-bit, **no alpha channel**, not interlaced.
 - JPEG: **baseline** (not progressive), 1:1 pixel density.
 - GIF: animated GIFs are played by AMITSE (min. 100 ms per frame, no disposal methods,
-  endless loop), but a vendor's boot path may show only the first frame.
+  endless loop), but a vendor's boot path may show only the first frame. The web app's GIF
+  output takes care of this: it places every frame on the canvas, uses one palette of up to
+  256 colours and needs no disposal method, as every frame is opaque and drawn over the last.
+  Faster animations either keep their speed (frames are dropped to play at most 10 per second)
+  or keep all frames (and play more slowly). Frames are stored either as the area that changed
+  since the last one (smaller) or complete (in case a board does not place partial frames
+  correctly). "File as-is" inserts a GIF unchanged.
 
 `biosimage replace` checks for these and refuses images it expects to fail unless you pass
 `-force`.

@@ -14,7 +14,7 @@ import (
 var jfifHeader = []byte{0xFF, 0xE0, 0, 16, 'J', 'F', 'I', 'F', 0, 1, 1, 0, 0, 1, 0, 1, 0, 0}
 
 // EncodeImage encodes an opaque image in a form that AMI's decoders handle: a 24-bit bottom-up
-// BMP, a baseline JPEG of the given quality (1–100), or an 8-bit RGB PNG.
+// BMP, a baseline JPEG of the given quality (1–100), an 8-bit RGB PNG, or a GIF (see EncodeGIF).
 func EncodeImage(img image.Image, format string, quality int) ([]byte, error) {
 	var buf bytes.Buffer
 	switch format {
@@ -32,6 +32,8 @@ func EncodeImage(img image.Image, format string, quality int) ([]byte, error) {
 			return nil, err
 		}
 		return buf.Bytes(), nil
+	case "GIF":
+		return EncodeGIF([]image.Image{img}, nil, true)
 	}
 	return nil, fmt.Errorf("cannot encode %s", format)
 }

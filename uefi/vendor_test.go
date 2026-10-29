@@ -137,7 +137,10 @@ func checkVendorFirmware(t *testing.T, e vendorFirmware, fw []byte) {
 			t.Fatalf("logo at %#x does not decode to the new image", l.File.Offset)
 		}
 	}
-	for _, c := range p.Changes {
+	for i, c := range p.Changes {
+		if size, storage, err := logos[i].StoredSize(img, ReplaceOptions{}); err != nil || size != c.NewSize || storage != c.Storage {
+			t.Errorf("StoredSize %d %v %v, ReplaceLogo wrote %d %v", size, storage, err, c.NewSize, c.Storage)
+		}
 		t.Logf("replaced: volume %#x, file %#x, %d -> %d bytes, %s, %s", c.VolumeOffset, c.NewOffset, c.OldSize, c.NewSize, c.Placement, c.Storage)
 		for _, r := range c.Recompressed {
 			t.Logf("  recompressed: file %s at %#x, %d -> %d bytes, %s", r.File.GUID, r.NewOffset, r.File.Size, r.NewSize, r.Placement)

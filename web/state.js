@@ -5,7 +5,7 @@ export const state = {
   fwName: '',
   fwInfo: null, // result of biosimage.open
   formats: null, // output formats offered for the BIOS: [{format, current, reason}]
-  source: null, // the new logo: { img, bytes, name, info, decodable }
+  source: null, // the new logo: { img, bytes, name, info, decodable, anim?: { frames, delays, timing }, animError? }
   built: false,
   screen: null, // the step the cursor is on
 };

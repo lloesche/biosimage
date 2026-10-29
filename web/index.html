@@ -66,7 +66,7 @@
 
         <div class="editor" id="editor" hidden>
           <div class="controls">
-            <div class="field" data-help="The format the new logo is stored in. Your image is placed on a canvas and encoded in it.&#10;&#10;Offered are BMP, which every AMI BIOS shows, the format of the current logo, and the formats this BIOS has a decoder for (best-effort detection). It starts with the format of the current logo.&#10;&#10;BMP is uncompressed and can be too big for the space in the BIOS; JPEG is much smaller.&#10;&#10;File as-is: inserts your file unchanged, e.g. to keep an animated GIF.">
+            <div class="field" data-help="The format the new logo is stored in. Your image is placed on a canvas and encoded in it.&#10;&#10;Offered are BMP, which every AMI BIOS shows, the format of the current logo, and the formats this BIOS has a decoder for (best-effort detection). It starts with the format of the current logo.&#10;&#10;BMP is uncompressed and can be too big for the space in the BIOS; JPEG is much smaller. GIF has up to 256 colours and keeps the animation of an animated GIF, played at up to 10 frames per second like the firmware does.&#10;&#10;File as-is: inserts your file unchanged.">
               <span class="k">Output</span>
               <span class="v">
                 <span id="formats"></span>
@@ -77,10 +77,29 @@
               <span class="k">Quality</span>
               <span class="v"><input type="range" id="quality" min="10" max="100" step="5" value="85" aria-label="JPEG quality"> <output id="quality-out">85</output></span>
             </div>
+            <div class="field" id="timing-field" data-help="AMI firmware shows each frame for at least 100 ms, so at most 10 frames per second.&#10;&#10;Keep speed: drops frames so that the animation plays at its original speed.&#10;&#10;All frames: keeps every frame; an animation faster than 10 frames per second then plays more slowly." hidden>
+              <span class="k">Timing</span>
+              <span class="v">
+                <label class="opt"><input type="radio" name="timing" value="speed" checked><span>Keep speed</span></label>
+                <label class="opt"><input type="radio" name="timing" value="all"><span>All frames</span></label>
+              </span>
+            </div>
+            <div class="field" id="frames-field" data-help="Changes: each frame after the first stores only the area that changed since the previous one, and is drawn over it. Much smaller.&#10;&#10;Complete: every frame is stored whole. Larger, but works even if a board's firmware does not place partial frames correctly; try it if the animation looks garbled." hidden>
+              <span class="k">Frames</span>
+              <span class="v">
+                <label class="opt"><input type="radio" name="store" value="changes" checked><span>Changes</span></label>
+                <label class="opt"><input type="radio" name="store" value="full"><span>Complete</span></label>
+              </span>
+            </div>
+            <div class="field" id="space-field" data-help="The size of the new logo file in the BIOS, stored the way the original is (e.g. LZMA-compressed), and the largest that fits.&#10;&#10;Patching is only possible when it fits." hidden>
+              <span class="k">Space</span>
+              <span class="v"><span class="meter"><span id="space-bar"></span></span> <span id="space-size"></span></span>
+            </div>
+            <p class="error" id="space-error" role="alert" hidden></p>
             <p class="hint" id="formats-hint"></p>
             <p class="hint" id="mode-hint"></p>
             <fieldset id="layout">
-              <div class="field" data-help="Size of the logo bitmap in pixels (max. 800 × 600). It starts at the size of the original logo.&#10;&#10;Original: the size of the current logo. Source: the size of your image (scaled down to fit 800 × 600), drawn at 100 %.&#10;&#10;The firmware draws the bitmap unscaled and centred on a black screen.">
+              <div class="field" data-help="Size of the logo bitmap in pixels (max. 800 × 600). It starts at the size of the original logo.&#10;&#10;Original: the size of the current logo, with the image at the default size in the centre. Source: the size of your image (scaled down to fit 800 × 600), drawn at 100 %.&#10;&#10;The firmware draws the bitmap unscaled and centred on a black screen.">
                 <span class="k">Canvas</span>
                 <span class="v">
                   <span class="num">[<input type="number" id="cw" min="16" max="800" step="1" aria-label="Canvas width">]</span>
@@ -112,7 +131,7 @@
               </div>
             </fieldset>
           </div>
-          <figure class="preview" data-help="Preview at real size on a 1920 × 1080 screen. On lower resolutions the logo appears larger, because the firmware does not scale it.&#10;&#10;For JPEG it shows the encoded file, with the artefacts of the chosen quality.">
+          <figure class="preview" data-help="Preview at real size on a 1920 × 1080 screen. On lower resolutions the logo appears larger, because the firmware does not scale it.&#10;&#10;It shows the encoded file: the artefacts of the chosen JPEG quality, the colours and animation of a GIF.">
             <div class="monitor" id="screen"><canvas id="canvas"></canvas><img id="encoded" alt="" hidden></div>
             <figcaption id="preview-caption"></figcaption>
           </figure>

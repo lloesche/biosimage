@@ -199,6 +199,9 @@ button.key:hover, button.key:focus-visible { background: var(--grey); color: var
   display: inline-block; width: 180px; max-width: 45%; height: 20px; vertical-align: -3px; background: var(--dots);
 }
 .meter span { display: block; height: 100%; background: var(--yellow); }
+.meter span.over { background: var(--red); }
+#space-field .meter { width: 100%; max-width: none; }
+#formats { display: contents; } /* its radios wrap like the "File as-is" one */
 
 #flash-help { flex: 1 1 100%; color: var(--grey); font-size: 21px; }
 #flash-help p { margin: 0; }

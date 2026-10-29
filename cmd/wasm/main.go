@@ -8,6 +8,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"image"
 	"syscall/js"
@@ -21,6 +22,9 @@ func main() {
 	api.Set("inspectImage", export(inspectImage))
 	api.Set("logoFormats", export(logoFormats))
 	api.Set("encodeImage", export(encodeImage))
+	api.Set("decodeAnimation", export(decodeAnimation))
+	api.Set("encodeAnimation", export(encodeAnimation))
+	api.Set("fitLogo", export(fitLogo))
 	api.Set("replaceLogo", export(replaceLogo))
 	api.Set("explore", export(explore))
 	api.Set("expandNode", export(expandNode))
@@ -67,7 +71,7 @@ func imageInfo(info *uefi.ImageInfo) map[string]any {
 	}
 	return map[string]any{
 		"format": info.Format, "ext": info.Ext, "width": info.Width, "height": info.Height,
-		"detail": info.Detail, "warnings": warnings,
+		"detail": info.Detail, "frames": info.Frames, "warnings": warnings,
 	}
 }
 
@@ -193,20 +197,110 @@ func inspectImage(args []js.Value) map[string]any {
 	return imageInfo(info)
 }
 
+// rgbaArg returns canvas ImageData of the given size as an image.
+func rgbaArg(v js.Value, w, h int) (*image.RGBA, error) {
+	img := &image.RGBA{Pix: bytesFrom(v), Stride: 4 * w, Rect: image.Rect(0, 0, w, h)}
+	if len(img.Pix) != 4*w*h {
+		return nil, errors.New("pixel data does not match the size")
+	}
+	return img, nil
+}
+
 // encodeImage(rgba, width, height, format, quality) -> {data} | {error}
 //
-// rgba is canvas ImageData; format is "BMP", "JPEG" or "PNG".
+// rgba is canvas ImageData; format is "BMP", "JPEG", "PNG" or "GIF".
 func encodeImage(args []js.Value) map[string]any {
-	w, h := args[1].Int(), args[2].Int()
-	img := &image.RGBA{Pix: bytesFrom(args[0]), Stride: 4 * w, Rect: image.Rect(0, 0, w, h)}
-	if len(img.Pix) != 4*w*h {
-		return map[string]any{"error": "pixel data does not match the size"}
+	img, err := rgbaArg(args[0], args[1].Int(), args[2].Int())
+	if err != nil {
+		return map[string]any{"error": err.Error()}
 	}
 	b, err := uefi.EncodeImage(img, args[3].String(), args[4].Int())
 	if err != nil {
 		return map[string]any{"error": err.Error()}
 	}
 	return map[string]any{"data": bytesTo(b)}
+}
+
+// decodeAnimation(gif bytes) -> {width, height, frames: [rgba], delays, timing} | {error}
+//
+// The frames are complete (uefi.DecodeAnimation); delays are in units of 10 ms. timing.speed and
+// timing.all are the frames to store, [{index, delay}], to keep the speed or all frames
+// (uefi.Animation.Timing).
+func decodeAnimation(args []js.Value) map[string]any {
+	a, err := uefi.DecodeAnimation(bytesFrom(args[0]))
+	if err != nil {
+		return map[string]any{"error": err.Error()}
+	}
+	frames, delays := make([]any, len(a.Frames)), make([]any, len(a.Delays))
+	for i, f := range a.Frames {
+		frames[i], delays[i] = bytesTo(f.Pix), a.Delays[i]
+	}
+	timing := func(keepSpeed bool) []any {
+		var list []any
+		for _, f := range a.Timing(keepSpeed) {
+			list = append(list, map[string]any{"index": f.Index, "delay": f.Delay})
+		}
+		return list
+	}
+	r := a.Frames[0].Rect
+	return map[string]any{"width": r.Dx(), "height": r.Dy(), "frames": frames, "delays": delays,
+		"timing": map[string]any{"speed": timing(true), "all": timing(false)}}
+}
+
+// encodeAnimation([rgba], width, height, delays, full) -> {data} | {error}: an animated GIF,
+// with complete frames if full is set, else only the changed areas (uefi.EncodeGIF).
+func encodeAnimation(args []js.Value) map[string]any {
+	w, h := args[1].Int(), args[2].Int()
+	frames, delays := make([]image.Image, args[0].Length()), make([]int, args[3].Length())
+	for i := range frames {
+		img, err := rgbaArg(args[0].Index(i), w, h)
+		if err != nil {
+			return map[string]any{"error": err.Error()}
+		}
+		frames[i] = img
+	}
+	for i := range delays {
+		delays[i] = args[3].Index(i).Int()
+	}
+	b, err := uefi.EncodeGIF(frames, delays, args[4].Truthy())
+	if err != nil {
+		return map[string]any{"error": err.Error()}
+	}
+	return map[string]any{"data": bytesTo(b)}
+}
+
+// fitLogo(firmware image, image bytes) -> {size, capacity, storage, fits, error?}
+//
+// size is the logo file that replaceLogo would write (uefi.Logo.StoredSize), for the logo file
+// with the least room if there are several; error says why it does not fit.
+func fitLogo(args []js.Value) map[string]any {
+	f, errRes := imageArg(args[0])
+	if f == nil {
+		return errRes
+	}
+	if f.logos == nil {
+		return map[string]any{"error": "no logo in this image"}
+	}
+	img := bytesFrom(args[1])
+	type fit struct {
+		size, room int
+		storage    uefi.Storage
+		err        error
+	}
+	var worst *fit
+	for _, l := range f.logos {
+		r := &fit{room: l.Capacity}
+		r.size, r.storage, r.err = l.StoredSize(img, uefi.ReplaceOptions{})
+		failing, worstFailing := r.err != nil, worst != nil && worst.err != nil
+		if worst == nil || failing && !worstFailing || failing == worstFailing && r.room-r.size < worst.room-worst.size {
+			worst = r
+		}
+	}
+	res := map[string]any{"size": worst.size, "capacity": worst.room, "storage": worst.storage.String(), "fits": worst.err == nil}
+	if worst.err != nil {
+		res["error"] = worst.err.Error()
+	}
+	return res
 }
 
 // replaceLogo(firmware image, image bytes, {noCompress}) -> {id, data, changes, logos} | {error}

@@ -458,6 +458,47 @@ func TestReplaceTooBig(t *testing.T) {
 	}
 }
 
+// TestStoredSize checks that the dry run predicts what ReplaceLogo writes, or that it fails.
+func TestStoredSize(t *testing.T) {
+	small, big := makeBMP(8, 8, false), makeBMP(100, 100, false)
+	cases := []struct {
+		name string
+		fw   []byte
+		img  []byte
+		opt  ReplaceOptions
+	}{
+		{"lzma", buildImage(buildVolume(t, 0x40000, 0xFF, otherFile(t, 100, 0xFF), lzmaLogoFile(t, small, 0xFF))), makeBMP(200, 100, true), ReplaceOptions{}},
+		{"lzma unwrapped", buildImage(buildVolume(t, 0x40000, 0xFF, lzmaLogoFile(t, small, 0xFF))), big, ReplaceOptions{NoCompress: true}},
+		{"moved", buildImage(buildVolume(t, 0x20000, 0xFF, rawLogoFile(t, small, 0xFF), otherFile(t, 50, 0xFF))), makeBMP(100, 60, true), ReplaceOptions{}},
+		{"raw file", buildImage(buildVolume(t, 0x10000, 0xFF, mustFile(t, LogoFileGUID, FileTypeRaw, small, 0xFF))), big, ReplaceOptions{}},
+		{"lzma fallback", buildImage(buildVolume(t, 0x2000, 0xFF, rawLogoFile(t, small, 0xFF))), big, ReplaceOptions{}},
+		{"too big", buildImage(buildVolume(t, 0x2000, 0xFF, rawLogoFile(t, small, 0xFF))), makeBMP(100, 100, true), ReplaceOptions{}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			logos, err := FindLogos(c.fw, LogoFileGUID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			before := bytes.Clone(c.fw)
+			size, storage, err := logos[0].StoredSize(c.img, c.opt)
+			if !bytes.Equal(c.fw, before) {
+				t.Fatal("StoredSize changed the image")
+			}
+			p, perr := ReplaceLogo(c.fw, c.img, LogoFileGUID, c.opt)
+			if perr != nil {
+				if !errors.Is(err, errTooBig) || !errors.Is(perr, errTooBig) || size <= logos[0].Capacity {
+					t.Fatalf("StoredSize: %d, %v; ReplaceLogo: %v", size, err, perr)
+				}
+				return
+			}
+			if ch := p.Changes[0]; err != nil || size != ch.NewSize || storage != ch.Storage || size > logos[0].Capacity {
+				t.Fatalf("StoredSize: %d %v %v; ReplaceLogo: %d %v", size, storage, err, ch.NewSize, ch.Storage)
+			}
+		})
+	}
+}
+
 // TestCapacityIsExact checks that a file of exactly Capacity bytes can be placed and that
 // nothing larger can, for each placement strategy.
 func TestCapacityIsExact(t *testing.T) {
@@ -568,7 +609,7 @@ func TestEncodeImage(t *testing.T) {
 	for i := range img.Pix {
 		img.Pix[i] = byte(i * 7)
 	}
-	for _, format := range []string{"BMP", "JPEG", "PNG"} {
+	for _, format := range []string{"BMP", "JPEG", "PNG", "GIF"} {
 		b, err := EncodeImage(img, format, 85)
 		if err != nil {
 			t.Fatal(err)

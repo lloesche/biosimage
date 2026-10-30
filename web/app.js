@@ -5,7 +5,7 @@
 
 import { $, MIME, el, fmtBytes, fmtNum, hex8, initHelp, objectURL, setError, setLocked, setupDrop, showHelp } from './ui.js';
 import { fileHeaderView } from './hex.js';
-import { blocked, initEditor, output, setDetectedFormats, setFirmware, setFreeSpace, storeOptions } from './editor.js';
+import { blocked, initEditor, prepareOutput, setAnimationSupport, setDetectedFormats, setFirmware, setFreeSpace } from './editor.js';
 import { initExplorer } from './explorer.js';
 import { initNav, updateTabs } from './nav.js';
 import { emit, events, state } from './state.js';
@@ -55,6 +55,7 @@ let fwLoads = 0; // to drop results for a BIOS file that has been replaced by an
 
 async function loadFirmware(file) {
   const load = ++fwLoads;
+  setAnimationSupport(false);
   setError($('fw-error'));
   $('fw-info').hidden = true;
   invalidate();
@@ -96,6 +97,7 @@ async function loadFirmware(file) {
   // background.
   const res = await call('logoFormats', [info.id]);
   if (load !== fwLoads || res.error) return;
+  setAnimationSupport(res.animationDXE);
   setDetectedFormats(res.formats);
   setFreeSpace(res.freeSpace);
 }
@@ -177,8 +179,11 @@ async function build() {
   const at = inputs;
   try {
     // replaceLogo verifies the result, including a fresh parse that must read back the image.
-    const opts = { ...storeOptions(), bootGuardOK: $('bootguard-ok').checked };
-    const res = await call('replaceLogo', [state.fwId, await output(), opts], 'Patching the BIOS');
+    const firmware = state.fwId;
+    const bootGuardOK = $('bootguard-ok').checked;
+    const { data, options } = await prepareOutput();
+    if (at !== inputs) return;
+    const res = await call('replaceLogo', [firmware, data, { ...options, bootGuardOK }], 'Patching the BIOS');
     if (res.error) throw new Error(res.error);
     if (at === inputs) showResult(res);
     else call('close', [res.id]);
@@ -193,8 +198,9 @@ async function build() {
 function showResult(res) {
   const c = res.changes[0];
   const capacity = res.capacity;
-  $('usage-bar').style.width = `${Math.min(100, (c.newSize / capacity) * 100).toFixed(1)}%`;
-  $('usage-size').textContent = `${fmtNum(c.newSize)} / ${fmtNum(capacity)} bytes`;
+  $('usage-bar').parentElement.style.display = res.animationDXE ? 'none' : '';
+  $('usage-bar').style.width = res.animationDXE ? '0%' : `${Math.min(100, (c.newSize / capacity) * 100).toFixed(1)}%`;
+  $('usage-size').textContent = res.animationDXE ? 'Animation, driver and first-frame fallback verified' : `${fmtNum(c.newSize)} / ${fmtNum(capacity)} bytes`;
   $('usage-text').textContent = [`${hex8(c.newOffset)} · ${c.storage}, ${c.placement}`,
     ...(res.changes.length > 1 ? [`${res.changes.length} copies`] : []), ...c.recompressed].join(' · ');
   $('bootguard-k').hidden = $('bootguard-v').hidden = !res.bootGuard;
@@ -249,6 +255,7 @@ setupDrop($('fw-drop'), $('fw-input'), loadFirmware);
 events.addEventListener('logo', () => {
   invalidate();
   if (state.fwInfo && state.source) setLocked('step-build', false);
+  updateBuild();
 });
 events.addEventListener('warnings', updateBuild);
 $('build').addEventListener('click', build);

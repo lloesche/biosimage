@@ -58,7 +58,7 @@ go install github.com/lloesche/biosimage@latest
 ```
 biosimage info    FIRMWARE                       show where and how the logo is stored
 biosimage extract [-o FILE] FIRMWARE             save the current logo image
-biosimage replace [-o FILE] [-compress | -no-compress] [-free-space] [-force] FIRMWARE IMAGE
+biosimage replace [-o FILE] [-compress | -no-compress] [-free-space] [-force] [-animate-dxe] FIRMWARE IMAGE
 ```
 
 - `replace` writes `FIRMWARE-logo.<ext>` unless `-o` is given; it never overwrites the input.
@@ -121,6 +121,32 @@ magick logo.png -background black -alpha remove -alpha off -resize 300x300 \
 Size limit: the logo lives in a small firmware volume (128–320 KiB on the tested boards) and the
 stored, compressed file must fit (`biosimage info` shows the capacity). Flat-colour logos compress to a few dozen KiB; photos may not
 fit.
+
+## Animated POST logo (experimental)
+
+Some boards, including the ASUS TUF GAMING B850I WIFI NEO, do not read GIF on their normal
+boot logo path. On compatible firmware, **Animate during POST** adds a small UEFI driver and
+animation data to the published main firmware volume. The normal logo is the first frame as
+a BMP, so it remains visible if the animation driver does not run. The following frames are
+drawn over that rectangle while the board starts up; playback stops on setup, boot menu,
+boot handoff, or ExitBootServices. If AMI's POST-state protocol is unavailable, playback is
+limited to a few seconds.
+
+```sh
+biosimage replace -animate-dxe -o animated.CAP original.CAP animation.gif
+```
+
+The CLI keeps every GIF frame, with delays of at least 100 ms, without resizing. The web app
+lets you place the animation on its canvas and choose timing before encoding it. The option
+is offered only for a decoded animated GIF and compatible firmware; it is never enabled by
+default. Firmware analysis must establish that the logo is read from any published volume,
+the AMI POST-state getter, and the matching placement rule. Known main-volume Boot Guard
+hash protection blocks this feature, even with `-force`; no signature or protection bypass
+is attempted. It cannot be combined with `-compress`, `-no-compress` or `-free-space`.
+
+This feature has emulator coverage, not a successful physical-board flash test. Keep a
+working recovery method such as USB BIOS FlashBack before trying it. Vendor image signature
+checks still apply to the resulting BIOS, as described below.
 
 ## More space (experimental)
 
@@ -275,6 +301,16 @@ block the page; it reports its progress to it. To run it locally:
 ```sh
 go run ./cmd/buildweb -serve    # builds web/biosimage.wasm and serves http://localhost:8080
 ```
+
+### Driver builds and automated testing
+
+CI, releases, Pages and vendor tests share a driver build workflow. It builds the UEFI
+driver from C using LLVM on Linux, then runs the C parser tests and headless QEMU/OVMF
+scenarios. The Go CLI and WebAssembly builds use that freshly built, tested driver from
+the same workflow run, rather than relying on the embedded binary in the checkout.
+Driver changes also trigger Pages deployment. See [`driver/README.md`](driver/README.md)
+for Linux, macOS and Windows build/test commands and emulator coverage. No vendor firmware
+is uploaded.
 
 ## License
 

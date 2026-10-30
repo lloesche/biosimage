@@ -8,6 +8,7 @@ import { $, MIME, clamp, el, fmtNum, objectURL, setError, setupDrop } from './ui
 import { decodeImage, sizeSVG } from './image.js';
 import { emit, state } from './state.js';
 import { call } from './wasm.js';
+import { outputChoices, selectOutput } from './output-model.js';
 
 // Firmware draws the logo unscaled; the preview shows it on a screen of this width.
 const PREVIEW_SCREEN_WIDTH = 1920;
@@ -24,17 +25,22 @@ const ed = {
   warnings: [],
   loads: 0, // to drop an image that has been replaced by another one while loading
   timer: 0,
+  animationSupported: false,
+  choices: outputChoices([{ format: 'BMP' }], false, false),
+  fitGeneration: 0,
 };
 
-// mode is the output format ("BMP", "JPEG", "PNG", "GIF") or "asis".
+// mode is the selected output choice: an image format, "dxe", or "asis".
 function mode() {
   return document.querySelector('input[name=mode]:checked')?.value || 'BMP';
 }
 
-const outputFormat = () => (mode() === 'asis' ? state.source.info.format : mode());
-
-// animated reports whether the output is an animation.
-const animated = () => mode() === 'GIF' && !!state.source?.anim;
+function selection() {
+  return selectOutput(ed.choices, mode(), state.source?.info?.format, {
+    compress: !$('compress-label').hidden && $('compress').checked,
+    freeSpace: !$('free-label').hidden && $('free-space').checked,
+  });
+}
 
 // shownFrames returns the frames of the animation to store, [{index, delay}], for the timing.
 const shownFrames = () => state.source.anim.timing[document.querySelector('input[name=timing]:checked').value];
@@ -42,38 +48,34 @@ const shownFrames = () => state.source.anim.timing[document.querySelector('input
 // encoded returns the logo to patch in for the current settings, encoding it on first use:
 // data, and preview for the browser (the same except for an animation's frame timing, see
 // uefi.FirmwareTiming).
-function encoded() {
-  if (ed.output?.version !== ed.version) ed.output = { version: ed.version, encoded: encode() };
+function encoded(selected) {
+  if (ed.output?.version !== ed.version) ed.output = { version: ed.version, encoded: encode(selected) };
   return ed.output.encoded;
 }
 
-// output returns the logo to patch in.
-export const output = async () => (await encoded()).data;
+// Capture the selection once: preview, fit and Build share these exact bytes/options.
+export async function prepareOutput(selected = selection()) {
+  const result = await encoded(selected);
+  return { data: result[selected.encodedKey], preview: result.preview, options: selected.options };
+}
 
-// storeOptions returns how replaceLogo is to store the logo.
-export const storeOptions = () => ({
-  compress: !$('compress-label').hidden && $('compress').checked,
-  freeSpace: !$('free-label').hidden && $('free-space').checked,
-});
-
-async function encode() {
-  const m = mode();
+async function encode(selected) {
   const src = state.source;
-  if (m === 'asis') return { data: src.bytes, preview: src.bytes };
+  if (selected.asIs) return { data: src.bytes, preview: src.bytes };
   const { width: w, height: h } = $('canvas');
   let res;
-  if (animated()) {
+  if (selected.animated) {
     const ctx = Object.assign(document.createElement('canvas'), { width: w, height: h }).getContext('2d', { willReadFrequently: true });
     const shown = shownFrames();
     const frames = shown.map((f) => {
       place(ctx, src.anim.frames[f.index]);
       return ctx.getImageData(0, 0, w, h).data;
     });
-    const full = document.querySelector('input[name=store]:checked').value === 'full';
+    const full = selected.frameStorage && document.querySelector('input[name=store]:checked').value === 'full';
     res = await call('encodeAnimation', [frames, w, h, shown.map((f) => f.delay), full]);
   } else {
     const px = $('canvas').getContext('2d').getImageData(0, 0, w, h).data;
-    res = await call('encodeImage', [px, w, h, m, Number($('quality').value)]);
+    res = await call('encodeImage', [px, w, h, selected.format, Number($('quality').value)]);
   }
   if (res.error) throw new Error(res.error);
   return { data: res.data, preview: res.preview || res.data };
@@ -82,7 +84,7 @@ async function encode() {
 // blocked reports whether the output does not fit, or has image or Boot Guard warnings that
 // have not been confirmed.
 export function blocked() {
-  return (ed.fit && !ed.fit.fits) || (ed.warnings.length > 0 && !$('force').checked) ||
+  return (selection().requiresFit && !ed.fit) || (ed.fit && !ed.fit.fits) || (ed.warnings.length > 0 && !$('force').checked) ||
     (!!ed.bootGuard && !$('bootguard-ok').checked);
 }
 
@@ -91,6 +93,7 @@ export function blocked() {
 // setFirmware adapts the editor to a newly loaded BIOS: the canvas size of its logo and the
 // formats known without reading the logo code (state.fwInfo.formats).
 export function setFirmware() {
+  ed.animationSupported = false;
   const logo = state.fwInfo.logos[0];
   $('compress').checked = logo.lzma; // like the original
   $('compress-label').hidden = logo.rawFile; // a raw file cannot hold a compressed image
@@ -110,6 +113,15 @@ export function setDetectedFormats(formats) {
   inspectSource();
 }
 
+// Available only after the firmware compatibility and protection checks pass.
+export function setAnimationSupport(supported) {
+  ed.animationSupported = !!supported;
+  if (state.formats) {
+    showFormats(state.formats, true);
+    render();
+  }
+}
+
 // setFreeSpace offers to move the logo into free space of this many bytes (none if 0), found
 // with the formats.
 export function setFreeSpace(capacity) {
@@ -121,6 +133,7 @@ export function setFreeSpace(capacity) {
 // refit checks the output against the space again, after the place to store it changed.
 function refit() {
   ed.fit = null;
+  $('space-field').hidden = true;
   emit('logo');
   showOutput();
 }
@@ -130,15 +143,17 @@ function refit() {
 function showFormats(formats, detected) {
   const before = mode();
   const prev = detected && before;
-  const def = (formats.some((f) => f.format === prev) && prev) || formats.find((f) => f.current)?.format || 'BMP';
+  ed.choices = outputChoices(formats, !!state.source?.anim, ed.animationSupported);
+  const def = (ed.choices.some((c) => c.value === prev) && prev) || formats.find((f) => f.current)?.format || 'BMP';
   const asis = detected && before === 'asis';
   state.formats = formats;
-  $('formats').replaceChildren(...formats.flatMap((f) => [
-    el('label', { className: 'opt' }, el('input', { type: 'radio', name: 'mode', value: f.format, checked: !asis && f.format === def }),
-      el('span', { textContent: f.format })), ' ']));
+  $('formats').replaceChildren(...ed.choices.flatMap((c) => [
+    el('label', { className: 'opt' }, el('input', { type: 'radio', name: 'mode', value: c.value, checked: !asis && c.value === def }),
+      el('span', { textContent: c.label })), ' ']));
   if (asis) document.querySelector('input[name=mode][value=asis]').checked = true;
   $('formats-hint').textContent = 'This BIOS can show ' + formats.map((f) => `${f.format} (${f.reason})`).join(', ') +
-    (detected ? '.' : '; checking which formats its logo code reads…');
+    (detected ? '.' : '; checking which formats its logo code reads…') +
+    (ed.choices.some((c) => c.kind === 'dxe') ? ' Experimental POST animation is also available for this GIF.' : '');
 }
 
 const offered = (format) => document.querySelector(`#formats input[value=${format}]`);
@@ -174,13 +189,16 @@ async function loadImage(file) {
   if (si?.frames > 1) await loadAnimation(src, file.name);
   if (load !== ed.loads) return;
   state.source = src;
+  showFormats(state.formats, true);
   $('img-drop-main').textContent = `[ ${file.name} ]`;
 
   // "File as-is" only for formats the firmware can decode.
   const asis = document.querySelector('input[name=mode][value=asis]');
   asis.disabled = !si;
   if (asis.disabled && asis.checked) document.querySelector('#formats input').checked = true;
-  if (src.anim && offered('GIF')) offered('GIF').checked = true;
+  // Native GIF playback keeps its existing default. Adding a driver always needs an
+  // explicit choice of the separate experimental output.
+  if (ed.choices.some((c) => c.kind === 'native-gif')) offered('GIF').checked = true;
   $('editor').hidden = false;
   render();
 }
@@ -222,11 +240,15 @@ function sourceSize() {
 }
 
 function updateControls() {
+  const selected = selection();
+  $('animation-warning').hidden = !selected.requiresFit;
+  $('compress').disabled = $('free-space').disabled = !selected.logoStorage;
   for (const r of [$('scale'), $('quality')]) r.style.setProperty('--p', `${((r.value - r.min) / (r.max - r.min)) * 100}%`);
   $('scale-out').textContent = `${$('scale').value}%`;
   $('quality-out').textContent = $('quality').value;
-  $('quality-field').hidden = mode() !== 'JPEG';
-  $('timing-field').hidden = $('frames-field').hidden = !animated();
+  $('quality-field').hidden = selected.asIs || selected.format !== 'JPEG';
+  $('timing-field').hidden = !selected.animated;
+  $('frames-field').hidden = !selected.frameStorage;
   for (const id of ['ox', 'oy']) {
     const v = Number($(id).value);
     $(`${id}-out`).textContent = v === 0 ? 'Centre' : `${v > 0 ? '+' : ''}${v}%`;
@@ -240,11 +262,11 @@ function updateHint() {
   let text = si
     ? `${name}: ${si.format} ${si.width}×${si.height}, ${si.detail}, ${fmtNum(bytes.length)} bytes.`
     : `${name}: ${img.naturalWidth}×${img.naturalHeight}.`;
-  const m = mode();
-  if (si?.frames > 1 && m !== 'asis') {
+  const selected = selection();
+  if (si?.frames > 1 && !selected.asIs) {
     text += animError ? ` Its animation could not be read (${animError}); only the first frame is used.`
-      : m === 'GIF' ? ` Animated: ${animationSummary()}. It plays while the board starts up (POST), usually a few seconds; some boards show only the first frame.`
-      : ` ${m} keeps only the first frame${offered('GIF') ? '; choose GIF to keep the animation' : ''}.`;
+      : selected.animated ? ` Animated: ${animationSummary()}. It plays while the board starts up (POST), usually a few seconds; some boards show only the first frame.`
+      : ` ${selected.format} keeps only the first frame${ed.choices.some((c) => c.kind !== 'static') ? '; choose an animated output to keep the animation' : ''}.`;
   }
   $('mode-hint').textContent = text;
 }
@@ -286,7 +308,7 @@ function render() {
   updateHint();
   const canvas = $('canvas');
   const ctx = canvas.getContext('2d');
-  const asis = mode() === 'asis';
+  const asis = selection().asIs;
   $('layout').disabled = asis;
   if (asis) {
     canvas.width = src.img.naturalWidth;
@@ -308,6 +330,7 @@ function render() {
 function changed() {
   ed.version++;
   ed.fit = null;
+  $('space-field').hidden = true;
   emit('logo');
   showOutput();
 }
@@ -316,26 +339,29 @@ function changed() {
 // over the canvas (so the preview has the artefacts of JPEG and the colours and animation of
 // GIF), its size, and the space it takes in the BIOS.
 function showOutput() {
+  const generation = ++ed.fitGeneration;
   const canvas = $('canvas');
   const caption = `${canvas.width}×${canvas.height} px, real size on a 1920×1080 screen`;
   $('preview-caption').textContent = caption;
   clearTimeout(ed.timer);
   ed.timer = setTimeout(async () => {
     const version = ed.version;
-    const m = mode();
-    let bytes, preview, fit;
+    const selected = selection();
+    const firmware = state.fwId;
+    let bytes, preview, options, fit;
     try {
-      ({ data: bytes, preview } = await encoded());
-      fit = await call('fitLogo', [state.fwId, bytes, storeOptions()]);
+      ({ data: bytes, preview, options } = await prepareOutput(selected));
+      if (version !== ed.version || generation !== ed.fitGeneration) return;
+      fit = await call('fitLogo', [firmware, bytes, options]);
     } catch (err) {
-      if (version === ed.version) $('preview-caption').textContent = `${caption} · ${err.message}`;
+      if (version === ed.version && generation === ed.fitGeneration) $('preview-caption').textContent = `${caption} · ${err.message}`;
       return;
     }
-    if (version !== ed.version) return;
-    $('preview-caption').textContent = `${caption} · ${m === 'asis' ? 'file' : m} ${fmtNum(bytes.length)} bytes`;
+    if (version !== ed.version || generation !== ed.fitGeneration) return;
+    $('preview-caption').textContent = `${caption} · ${selected.asIs ? 'file' : selected.format} ${fmtNum(bytes.length)} bytes`;
     const enc = $('encoded');
-    enc.onload = () => (enc.hidden = version !== ed.version);
-    enc.src = objectURL('encoded', preview, MIME[outputFormat()]);
+    enc.onload = () => (enc.hidden = version !== ed.version || generation !== ed.fitGeneration);
+    enc.src = objectURL('encoded', preview, MIME[selected.format]);
     enc.style.width = canvas.style.width;
     showFit(fit);
   }, 150);
@@ -343,18 +369,21 @@ function showOutput() {
 
 // showFit shows how much of the space in the BIOS the output takes, and whether it fits.
 function showFit(fit) {
-  ed.fit = fit.error && !fit.size ? null : fit; // e.g. no logo: Build reports it
+  ed.fit = fit.animationDXE ? fit : fit.error && !fit.size ? null : fit; // e.g. no logo: Build reports it
   $('space-field').hidden = !ed.fit;
   if (ed.fit) {
+    $('space-bar').parentElement.style.display = fit.animationDXE ? 'none' : '';
     const { size, capacity, fits } = fit;
     const bar = $('space-bar');
-    bar.style.width = `${Math.min(100, (size / capacity) * 100).toFixed(1)}%`;
+    bar.style.width = fit.animationDXE ? '0%' : `${Math.min(100, (size / capacity) * 100).toFixed(1)}%`;
     bar.classList.toggle('over', !fits);
-    $('space-size').textContent = `${fmtNum(size)} / ${fmtNum(capacity)} bytes · ${fit.storage}`;
+    $('space-size').textContent = fit.animationDXE
+      ? fits ? fit.storage : 'Animation does not fit or is incompatible'
+      : `${fmtNum(size)} / ${fmtNum(capacity)} bytes · ${fit.storage}`;
   }
   const tip = (!$('compress-label').hidden && !$('compress').checked ? 'Store it compressed. ' : '') +
     ({ BMP: 'Choose JPEG, or make the canvas or the logo smaller.', JPEG: 'Lower the quality, or make the canvas smaller.',
-      GIF: 'Make the canvas or the logo smaller, or use an animation with fewer frames.', asis: 'Use a smaller file.' }[mode()] ||
+      GIF: 'Make the canvas or the logo smaller, or use an animation with fewer frames.', asis: 'Use a smaller file.' }[selection().asIs ? 'asis' : selection().format] ||
     'Choose JPEG, or make the canvas smaller.');
   setError($('space-error'), !ed.fit || fit.fits ? ''
     : fit.size > fit.capacity ? `The new logo does not fit: its file needs ${fmtNum(fit.size)} bytes and the BIOS has room for ${fmtNum(fit.capacity)}. ${tip}`
@@ -367,7 +396,7 @@ function showFit(fit) {
 
 function updateWarnings() {
   const si = state.source?.info;
-  ed.warnings = mode() === 'asis' && si ? si.warnings : [];
+  ed.warnings = selection().asIs && si ? si.warnings : [];
   $('img-warnings').replaceChildren(...ed.warnings.map((w) => el('li', { textContent: w })));
   $('img-warnings').hidden = ed.warnings.length === 0;
   $('force-label').hidden = ed.warnings.length === 0;

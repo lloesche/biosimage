@@ -20,6 +20,12 @@ type TSECode struct {
 	AnyVolumeLogo bool
 	// GIFMinDelay: the GIF player raises frame delays from 10 to 90 ms to 100 ms.
 	GIFMinDelay bool
+	// PostManagerState verifies the installed AMI table's +0x50 no-argument state
+	// getter and a registered animation timer which stops on that same state >3.
+	PostManagerState bool
+	// LogoPlacement verifies the 40%-threshold, 382/1000-height placement code
+	// called by that timer. Unknown instruction layouts remain unsupported.
+	LogoPlacement bool
 	// LogoFormats are the formats besides BMP that the boot logo code reads, of "JPEG", "PNG"
 	// and "GIF" in that order; nil if its format test was not found (logoFormats). The other
 	// decoders an AMITSE contains serve its setup screens, or no code at all.
@@ -37,6 +43,9 @@ func (n *Node) TSECode() TSECode {
 	tse.Walk(func(s *Node) bool {
 		if s.Kind == KindSection && s.Section.Type == SectionPE32 {
 			if pe := parsePE64(s.Section.Body()); pe != nil {
+				post, placement := pe.animationContract()
+				c.PostManagerState = c.PostManagerState || post
+				c.LogoPlacement = c.LogoPlacement || placement
 				c.AnyVolumeLogo = c.AnyVolumeLogo || pe.readsSectionFromEveryVolume()
 				c.GIFMinDelay = c.GIFMinDelay || pe.clampsGIFDelay()
 				if f := pe.logoFormats(); f != nil {
@@ -151,7 +160,8 @@ func (pe *pe64) refsTo(target int) []int {
 func ripTarget(inst x86asm.Inst, pc int) int {
 	for _, a := range inst.Args {
 		if m, ok := a.(x86asm.Mem); ok && m.Base == x86asm.RIP {
-			return pc + inst.Len + int(m.Disp)
+			// x86asm may expose RIP's encoded disp32 as an unsigned value.
+			return pc + inst.Len + int(int32(m.Disp))
 		}
 	}
 	return -1

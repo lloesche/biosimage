@@ -1,0 +1,48 @@
+name: Build and test animation driver
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  driver:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install LLVM, QEMU and OVMF
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang lld qemu-system-x86 ovmf python3
+      - name: Build production driver from source
+        run: |
+          sh driver/build.sh
+          hash=$(sha256sum uefi/animlogo.efi | cut -d ' ' -f 1)
+          echo "ANIMLOGO_SHA256=$hash" >> "$GITHUB_ENV"
+          echo "Driver source commit: $(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+          echo "Production driver SHA256: $hash" >> "$GITHUB_STEP_SUMMARY"
+      - name: Run C parser and headless QEMU/OVMF tests
+        run: |
+          sh driver/test-qemu.sh
+          echo "$ANIMLOGO_SHA256  uefi/animlogo.efi" | sha256sum --check --strict
+      - name: Share freshly built production driver
+        uses: actions/upload-artifact@v6
+        with:
+          name: animation-driver
+          path: uefi/animlogo.efi
+          if-no-files-found: error
+          retention-days: 7
+      # Only synthetic OVMF tests run here. No vendor firmware is uploaded.
+      - name: Preserve QEMU diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: qemu-diagnostics
+          path: |
+            driver/build/case-*.log
+            driver/build/qemu-*.err
+            driver/build/animation.ppm
+          if-no-files-found: ignore
+          retention-days: 7

@@ -1,5 +1,10 @@
 version: 2
 
+before:
+  hooks:
+    # Install only after GoReleaser's clean-checkout check, before Go embeds it.
+    - go run ./driver/install.go
+
 builds:
   - env:
       - CGO_ENABLED=0

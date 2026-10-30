@@ -41,8 +41,10 @@ type vendorFirmware struct {
 		FreeSpace   int    `json:"freeSpace"`
 		BootGuard   string `json:"bootGuard"`
 		// What AMITSE's code shows (TSECode).
-		AnyVolumeLogo bool `json:"anyVolumeLogo"`
-		GIFMinDelay   bool `json:"gifMinDelay"`
+		AnyVolumeLogo    bool `json:"anyVolumeLogo"`
+		GIFMinDelay      bool `json:"gifMinDelay"`
+		PostManagerState bool `json:"postManagerState"`
+		LogoPlacement    bool `json:"logoPlacement"`
 	} `json:"expect"`
 }
 
@@ -152,8 +154,8 @@ func checkVendorFirmware(t *testing.T, e vendorFirmware, fw []byte) {
 			t.Logf("  recompressed: file %s at %#x, %d -> %d bytes, %s", r.File.GUID, r.NewOffset, r.File.Size, r.NewSize, r.Placement)
 		}
 	}
-	if c := root.TSECode(); c.AnyVolumeLogo != e.Expect.AnyVolumeLogo || c.GIFMinDelay != e.Expect.GIFMinDelay {
-		t.Errorf("AMITSE code %+v, want any-volume logo %v, GIF min delay %v", c, e.Expect.AnyVolumeLogo, e.Expect.GIFMinDelay)
+	if c := root.TSECode(); c.AnyVolumeLogo != e.Expect.AnyVolumeLogo || c.GIFMinDelay != e.Expect.GIFMinDelay || c.PostManagerState != e.Expect.PostManagerState || c.LogoPlacement != e.Expect.LogoPlacement {
+		t.Errorf("AMITSE code %+v, want any-volume logo %v, GIF min delay %v, post state %v, placement %v", c, e.Expect.AnyVolumeLogo, e.Expect.GIFMinDelay, e.Expect.PostManagerState, e.Expect.LogoPlacement)
 	}
 	b := DetectBootGuard(fw)
 	var bg []string

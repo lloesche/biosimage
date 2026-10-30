@@ -20,7 +20,7 @@ const usage = `biosimage - replace the boot logo in AMI Aptio / UEFI firmware im
 Usage:
   biosimage info    FIRMWARE
   biosimage extract [-o FILE] FIRMWARE
-  biosimage replace [-o FILE] [-compress | -no-compress] [-free-space] [-force] FIRMWARE IMAGE
+  biosimage replace [-o FILE] [-compress | -no-compress] [-free-space] [-force] [-animate-dxe] FIRMWARE IMAGE
   biosimage version
 
 FIRMWARE is a BIOS file as downloaded from the vendor (e.g. ASUS .CAP) or a raw
@@ -210,6 +210,7 @@ func cmdReplace(w io.Writer, args []string) error {
 	compress := fs.Bool("compress", false, "store the image LZMA-compressed (default: like the original)")
 	noCompress := fs.Bool("no-compress", false, "store the image uncompressed (default: like the original)")
 	freeSpace := fs.Bool("free-space", false, "move the logo into the free space of the main volume (experimental)")
+	animateDXE := fs.Bool("animate-dxe", false, "experimental animated GIF playback during POST (compatible firmware only)")
 	force := fs.Bool("force", false, "continue despite image and Boot Guard warnings")
 	guidStr := guidFlag(fs)
 	pos, err := parse(fs, args, 2)
@@ -243,20 +244,25 @@ func cmdReplace(w io.Writer, args []string) error {
 	if err != nil {
 		return err
 	}
-	info, err := uefi.InspectImage(img)
-	if err != nil {
-		if !*force {
-			return fmt.Errorf("%s: %w (use -force to insert it anyway)", imgPath, err)
-		}
-		fmt.Fprintf(w, "warning: %s: %s\n", imgPath, err)
-	} else {
-		fmt.Fprintf(w, "Image:  %s %dx%d, %s, %d bytes\n", info.Format, info.Width, info.Height, info.Detail, len(img))
-		info.CheckSupported(root.LogoFormats(logos))
-		for _, warn := range info.Warnings {
-			fmt.Fprintf(w, "warning: %s\n", warn)
-		}
-		if len(info.Warnings) > 0 && !*force {
-			return errors.New("image may not display correctly; fix it or use -force")
+	if *animateDXE && (guid != uefi.LogoFileGUID || *compress || *noCompress || *freeSpace) {
+		return usageError("-animate-dxe requires the standard logo GUID and cannot be combined with -compress, -no-compress or -free-space")
+	}
+	if !*animateDXE {
+		info, err := uefi.InspectImage(img)
+		if err != nil {
+			if !*force {
+				return fmt.Errorf("%s: %w (use -force to insert it anyway)", imgPath, err)
+			}
+			fmt.Fprintf(w, "warning: %s: %s\n", imgPath, err)
+		} else {
+			fmt.Fprintf(w, "Image:  %s %dx%d, %s, %d bytes\n", info.Format, info.Width, info.Height, info.Detail, len(img))
+			info.CheckSupported(root.LogoFormats(logos))
+			for _, warn := range info.Warnings {
+				fmt.Fprintf(w, "warning: %s\n", warn)
+			}
+			if len(info.Warnings) > 0 && !*force {
+				return errors.New("image may not display correctly; fix it or use -force")
+			}
 		}
 	}
 
@@ -269,11 +275,20 @@ func cmdReplace(w io.Writer, args []string) error {
 	case *noCompress:
 		opt.Compression = uefi.CompressNone
 	}
-	p, err := uefi.ReplaceLogo(buf, img, guid, opt)
+	var p *uefi.Patch
+	if *animateDXE {
+		// This path has strict compatibility/protection checks: -force cannot bypass them.
+		p, err = uefi.ReplaceAnimatedLogo(buf, img, guid)
+	} else {
+		p, err = uefi.ReplaceLogo(buf, img, guid, opt)
+	}
 	if err != nil {
 		return err
 	}
 	if p.BootGuardWarning != "" {
+		if *animateDXE {
+			return fmt.Errorf("animation not written: %s", p.BootGuardWarning)
+		}
 		fmt.Fprintf(w, "warning: %s\n", strings.TrimSpace(wrap(p.BootGuardWarning, "         ", 90)))
 		if !*force {
 			return errors.New("not written; use -force if you have a recovery path")
@@ -290,6 +305,9 @@ func cmdReplace(w io.Writer, args []string) error {
 		return err
 	}
 	fmt.Fprintf(w, "wrote %s (verified)\n", dst)
+	if *animateDXE {
+		fmt.Fprintln(w, "Experimental POST animation added; the first frame is the normal boot logo fallback. Keep USB BIOS FlashBack or another recovery method available.")
+	}
 	if c := root.Capsule; c != nil && c.Signed {
 		fmt.Fprintf(w, "\nnote: the input is signed (%s).\n%s\n", c.Kind, wrap(c.FlashNote(), "", 90))
 	}

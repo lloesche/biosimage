@@ -98,6 +98,7 @@
                 <label class="opt" id="free-label" hidden data-help="EXPERIMENTAL. Moves the logo into the free space of the BIOS's main volume (FV_MAIN), which has megabytes free, and removes the original logo file.&#10;&#10;AMI's setup module loads the logo from whichever firmware volume has it, and this BIOS publishes the main volume like the one the logo is in. This is verified in the firmware code, not on a running board.&#10;&#10;If it does not work, the board boots without a logo. Have a recovery path (e.g. USB BIOS FlashBack) all the same."><input type="checkbox" id="free-space"><span>Use free space (experimental)</span></label>
               </span>
             </div>
+            <p class="hint" id="animation-warning" hidden>Experimental: adds a boot-time animation driver and first-frame fallback. Keep USB BIOS FlashBack or another recovery method available.</p>
             <p class="error" id="space-error" role="alert" hidden></p>
             <p class="hint" id="formats-hint"></p>
             <p class="hint" id="mode-hint"></p>

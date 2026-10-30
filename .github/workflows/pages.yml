@@ -11,12 +11,14 @@ on:
     branches: [main]
     paths:
       - "web/**"
+      - "driver/**"
       - "uefi/**"
       - "cmd/wasm/**"
       - "cmd/buildweb/**"
       - "go.mod"
       - "go.sum"
       - ".github/workflows/pages.yml"
+      - ".github/workflows/driver.yml"
   workflow_dispatch:
 
 permissions:
@@ -29,7 +31,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  driver:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    uses: ./.github/workflows/driver.yml
   deploy:
+    needs: driver
     if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     environment:
@@ -38,8 +44,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: main
+          ref: ${{ github.sha }} # same revision as the shared driver build
           fetch-depth: 0 # tags, for the version
+      - uses: actions/download-artifact@v7
+        with:
+          name: animation-driver
+          path: uefi
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod

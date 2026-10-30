@@ -149,6 +149,12 @@ func logoFormats(args []js.Value) map[string]any {
 	}
 	f.formats = f.root.LogoFormats(f.logos)
 	res := map[string]any{"formats": formatsJS(f.formats), "freeSpace": 0}
+	res["animationDXE"] = false
+	if err := uefi.AnimationSupport(f.root.Bytes()); err == nil {
+		res["animationDXE"] = true
+	} else {
+		res["animationReason"] = err.Error()
+	}
 	if free, err := f.root.FreeSpace(); err == nil {
 		f.free, res["freeSpace"] = free, free.Capacity
 	}
@@ -299,6 +305,14 @@ func fitLogo(args []js.Value) map[string]any {
 	if f.logos == nil {
 		return map[string]any{"error": "no logo in this image"}
 	}
+	if animationOption(args, 2) {
+		_, err := uefi.ReplaceAnimatedLogo(f.root.Bytes(), bytesFrom(args[1]), uefi.LogoFileGUID)
+		res := map[string]any{"animationDXE": true, "fits": err == nil, "bootGuard": "", "storage": "Animation, driver and fallback logo verified to fit"}
+		if err != nil {
+			res["error"] = err.Error()
+		}
+		return res
+	}
 	opt, err := optionsArg(f, args, 2)
 	if err != nil {
 		return map[string]any{"error": err.Error()}
@@ -357,7 +371,12 @@ func replaceLogo(args []js.Value) map[string]any {
 	if err != nil {
 		return map[string]any{"error": err.Error()}
 	}
-	p, err := uefi.ReplaceLogo(f.root.Bytes(), bytesFrom(args[1]), uefi.LogoFileGUID, opt)
+	var p *uefi.Patch
+	if animationOption(args, 2) {
+		p, err = uefi.ReplaceAnimatedLogo(f.root.Bytes(), bytesFrom(args[1]), uefi.LogoFileGUID)
+	} else {
+		p, err = uefi.ReplaceLogo(f.root.Bytes(), bytesFrom(args[1]), uefi.LogoFileGUID, opt)
+	}
 	if err != nil {
 		return map[string]any{"error": err.Error()}
 	}
@@ -382,7 +401,11 @@ func replaceLogo(args []js.Value) map[string]any {
 		capacity = f.free.Capacity
 	}
 	return map[string]any{"id": id, "data": bytesTo(p.Data), "changes": list, "logos": logosJS(p.Logos),
-		"capacity": capacity, "bootGuard": p.BootGuardWarning}
+		"capacity": capacity, "bootGuard": p.BootGuardWarning, "animationDXE": animationOption(args, 2)}
+}
+
+func animationOption(args []js.Value, i int) bool {
+	return len(args) > i && args[i].Truthy() && args[i].Get("animateDXE").Truthy()
 }
 
 // optionsArg returns the ReplaceOptions in args[i], if given: {compress, freeSpace}. compress

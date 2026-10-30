@@ -11,20 +11,27 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths: ["uefi/**", "go.mod", "go.sum", "testdata/firmware.json", ".github/workflows/firmware.yml"]
+    paths: ["driver/**", "uefi/**", "go.mod", "go.sum", "testdata/firmware.json", ".github/workflows/firmware.yml", ".github/workflows/driver.yml"]
   pull_request:
-    paths: ["uefi/**", "go.mod", "go.sum", "testdata/firmware.json", ".github/workflows/firmware.yml"]
+    paths: ["driver/**", "uefi/**", "go.mod", "go.sum", "testdata/firmware.json", ".github/workflows/firmware.yml", ".github/workflows/driver.yml"]
 
 permissions:
   contents: read
 
 jobs:
+  driver:
+    uses: ./.github/workflows/driver.yml
   firmware:
+    needs: driver
     runs-on: ubuntu-latest
     env:
       BIOSIMAGE_FIRMWARE_CACHE: ${{ github.workspace }}/../firmware-cache
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v7
+        with:
+          name: animation-driver
+          path: uefi
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
@@ -34,4 +41,4 @@ jobs:
           key: vendor-firmware-${{ hashFiles('testdata/firmware.json') }}
           restore-keys: vendor-firmware-
       - name: Test against vendor firmware
-        run: go test ./uefi -run TestVendorFirmware -v -timeout 30m
+        run: go test ./uefi -run 'TestVendorFirmware|TestAnimatedASUSFirmware' -count=1 -v -timeout 30m

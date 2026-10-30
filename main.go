@@ -20,7 +20,7 @@ const usage = `biosimage - replace the boot logo in AMI Aptio / UEFI firmware im
 Usage:
   biosimage info    FIRMWARE
   biosimage extract [-o FILE] FIRMWARE
-  biosimage replace [-o FILE] [-no-compress] [-free-space] [-force] FIRMWARE IMAGE
+  biosimage replace [-o FILE] [-compress | -no-compress] [-free-space] [-force] FIRMWARE IMAGE
   biosimage version
 
 FIRMWARE is a BIOS file as downloaded from the vendor (e.g. ASUS .CAP) or a raw
@@ -207,7 +207,8 @@ func cmdExtract(w io.Writer, args []string) error {
 func cmdReplace(w io.Writer, args []string) error {
 	fs := flag.NewFlagSet("replace", flag.ContinueOnError)
 	out := fs.String("o", "", "output file (default: FIRMWARE with -logo added to the name)")
-	noCompress := fs.Bool("no-compress", false, "store the image uncompressed")
+	compress := fs.Bool("compress", false, "store the image LZMA-compressed (default: like the original)")
+	noCompress := fs.Bool("no-compress", false, "store the image uncompressed (default: like the original)")
 	freeSpace := fs.Bool("free-space", false, "move the logo into the free space of the main volume (experimental)")
 	force := fs.Bool("force", false, "continue despite image and Boot Guard warnings")
 	guidStr := guidFlag(fs)
@@ -259,7 +260,16 @@ func cmdReplace(w io.Writer, args []string) error {
 		}
 	}
 
-	p, err := uefi.ReplaceLogo(buf, img, guid, uefi.ReplaceOptions{NoCompress: *noCompress, UseFreeSpace: *freeSpace})
+	opt := uefi.ReplaceOptions{UseFreeSpace: *freeSpace}
+	switch {
+	case *compress && *noCompress:
+		return usageError("-compress and -no-compress exclude each other")
+	case *compress:
+		opt.Compression = uefi.CompressLZMA
+	case *noCompress:
+		opt.Compression = uefi.CompressNone
+	}
+	p, err := uefi.ReplaceLogo(buf, img, guid, opt)
 	if err != nil {
 		return err
 	}

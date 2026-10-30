@@ -177,6 +177,7 @@ func logosJS(logos []*uefi.Logo) []any {
 			"volumeOffset": l.Volume.Offset, "volumeLength": l.Volume.Length,
 			"storage": l.Storage(), "name": l.Name, "capacity": l.Capacity,
 			"compressed": l.Compressed(), "enclosing": enclosing, "header": bytesTo(l.Header(64)),
+			"lzma": l.Encoding == uefi.EncodingLZMA, "rawFile": l.Encoding == uefi.EncodingRawFile,
 		}
 		if l.Image != nil {
 			m["image"] = bytesTo(l.Image)
@@ -313,8 +314,8 @@ func fitLogo(args []js.Value) map[string]any {
 
 func fitResult(f *firmware, img []byte, opt uefi.ReplaceOptions) map[string]any {
 	if opt.UseFreeSpace {
-		size, err := f.free.StoredSize(f.logos[0], img)
-		res := map[string]any{"size": size, "capacity": f.free.Capacity, "storage": uefi.StoredInFreeSpace.String(), "fits": err == nil}
+		size, storage, err := f.free.StoredSize(f.logos[0], img, opt)
+		res := map[string]any{"size": size, "capacity": f.free.Capacity, "storage": storage.String(), "fits": err == nil}
 		if err != nil {
 			res["error"] = err.Error()
 		}
@@ -328,7 +329,7 @@ func fitResult(f *firmware, img []byte, opt uefi.ReplaceOptions) map[string]any 
 	var worst *fit
 	for _, l := range f.logos {
 		r := &fit{room: l.Capacity}
-		r.size, r.storage, r.err = l.StoredSize(img, uefi.ReplaceOptions{})
+		r.size, r.storage, r.err = l.StoredSize(img, opt)
 		failing, worstFailing := r.err != nil, worst != nil && worst.err != nil
 		if worst == nil || failing && !worstFailing || failing == worstFailing && r.room-r.size < worst.room-worst.size {
 			worst = r
@@ -341,7 +342,7 @@ func fitResult(f *firmware, img []byte, opt uefi.ReplaceOptions) map[string]any 
 	return res
 }
 
-// replaceLogo(firmware image, image bytes, {noCompress, freeSpace, bootGuardOK})
+// replaceLogo(firmware image, image bytes, {compress, freeSpace, bootGuardOK})
 // -> {id, data, changes, logos, capacity, bootGuard} | {error}
 //
 // id is the patched image, opened from the tree that verified it; logos are read back from it.
@@ -384,11 +385,14 @@ func replaceLogo(args []js.Value) map[string]any {
 		"capacity": capacity, "bootGuard": p.BootGuardWarning}
 }
 
-// optionsArg returns the ReplaceOptions in args[i], if given: {noCompress, freeSpace}.
+// optionsArg returns the ReplaceOptions in args[i], if given: {compress, freeSpace}. compress
+// true stores the image LZMA-compressed, false uncompressed, and without it like the original.
 func optionsArg(f *firmware, args []js.Value, i int) (uefi.ReplaceOptions, error) {
 	var opt uefi.ReplaceOptions
 	if len(args) > i && args[i].Truthy() {
-		opt.NoCompress = args[i].Get("noCompress").Truthy()
+		if c := args[i].Get("compress"); c.Type() == js.TypeBoolean {
+			opt.Compression = map[bool]uefi.Compression{true: uefi.CompressLZMA, false: uefi.CompressNone}[c.Bool()]
+		}
 		opt.UseFreeSpace = args[i].Get("freeSpace").Truthy()
 	}
 	if opt.UseFreeSpace && f.free == nil {

@@ -195,8 +195,8 @@ func checkFreeSpace(t *testing.T, e vendorFirmware, root *Node, logos []*Logo, b
 		t.Fatalf("free space: %v", err)
 	}
 	c := p.Changes[0]
-	if size, err := fs.StoredSize(l, img); err != nil || size != c.NewSize {
-		t.Errorf("free space: StoredSize %d %v, ReplaceLogo wrote %d", size, err, c.NewSize)
+	if size, storage, err := fs.StoredSize(l, img, ReplaceOptions{UseFreeSpace: true}); err != nil || size != c.NewSize || storage != c.Storage {
+		t.Errorf("free space: StoredSize %d %v %v, ReplaceLogo wrote %d %v", size, storage, err, c.NewSize, c.Storage)
 	}
 	if p.Logos[0].Volume.Offset != fs.Volume.Offset {
 		t.Errorf("free space: logo read back from the volume at %#x", p.Logos[0].Volume.Offset)

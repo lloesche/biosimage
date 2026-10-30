@@ -15,7 +15,7 @@ const (
 	PlacedPadded                     // same slot, remainder filled with a pad file
 	PlacedMoved                      // moved after the last file, old slot turned into a pad file
 	PlacedShifted                    // grown in place, the following files moved towards the end
-	PlacedFreeSpace                  // added after the last file of the main volume
+	PlacedFreeSpace                  // added after the last file of the main volume, old file padded
 )
 
 func (p Placement) String() string {
@@ -25,7 +25,7 @@ func (p Placement) String() string {
 		"rewritten in place, remainder padded",
 		"moved to end of volume, old slot padded",
 		"rewritten in place, following files moved",
-		"added to the free space of the main volume",
+		"moved to the free space of the main volume, old logo file padded",
 	}[p]
 }
 

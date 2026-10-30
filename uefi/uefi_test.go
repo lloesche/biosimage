@@ -271,10 +271,10 @@ func TestReplaceRawFileType(t *testing.T) {
 	}
 }
 
-func TestReplaceNoCompressUnwrapsLZMA(t *testing.T) {
+func TestReplaceUncompressedUnwrapsLZMA(t *testing.T) {
 	img := makeBMP(30, 30, false)
 	fw := buildImage(buildVolume(t, 0x20000, 0xFF, lzmaLogoFile(t, makeBMP(8, 8, false), 0xFF)))
-	p := replace(t, fw, img, ReplaceOptions{NoCompress: true})
+	p := replace(t, fw, img, ReplaceOptions{Compression: CompressNone})
 	if l := checkVolume(t, p.Data, img); l.Encoding != EncodingRawSection || l.Name != "Logo.bmp" {
 		t.Fatalf("encoding %v name %q", l.Encoding, l.Name)
 	}
@@ -445,8 +445,16 @@ func TestReplaceCompressesUncompressedLogoThatDoesNotFit(t *testing.T) {
 	if p.Changes[0].Storage != StoredLZMAFallback {
 		t.Fatalf("storage %v", p.Changes[0].Storage)
 	}
-	if _, err := ReplaceLogo(fw, img, LogoFileGUID, ReplaceOptions{NoCompress: true}); !errors.Is(err, errTooBig) {
-		t.Fatalf("-no-compress must not fall back to compression, got %v", err)
+	if _, err := ReplaceLogo(fw, img, LogoFileGUID, ReplaceOptions{Compression: CompressNone}); !errors.Is(err, errTooBig) {
+		t.Fatalf("CompressNone must not fall back to compression, got %v", err)
+	}
+	p = replace(t, fw, img, ReplaceOptions{Compression: CompressLZMA})
+	if l := checkVolume(t, p.Data, img); l.Encoding != EncodingLZMA || p.Changes[0].Storage != StoredLZMAWrapped {
+		t.Fatalf("CompressLZMA: encoding %v, storage %v", l.Encoding, p.Changes[0].Storage)
+	}
+	raw := buildImage(buildVolume(t, 0x10000, 0xFF, mustFile(t, LogoFileGUID, FileTypeRaw, makeBMP(8, 8, false), 0xFF)))
+	if _, err := ReplaceLogo(raw, img, LogoFileGUID, ReplaceOptions{Compression: CompressLZMA}); !errors.Is(err, errRawFileCompress) {
+		t.Fatalf("CompressLZMA on a raw file: %v", err)
 	}
 }
 
@@ -468,7 +476,8 @@ func TestStoredSize(t *testing.T) {
 		opt  ReplaceOptions
 	}{
 		{"lzma", buildImage(buildVolume(t, 0x40000, 0xFF, otherFile(t, 100, 0xFF), lzmaLogoFile(t, small, 0xFF))), makeBMP(200, 100, true), ReplaceOptions{}},
-		{"lzma unwrapped", buildImage(buildVolume(t, 0x40000, 0xFF, lzmaLogoFile(t, small, 0xFF))), big, ReplaceOptions{NoCompress: true}},
+		{"lzma unwrapped", buildImage(buildVolume(t, 0x40000, 0xFF, lzmaLogoFile(t, small, 0xFF))), big, ReplaceOptions{Compression: CompressNone}},
+		{"lzma wrapped", buildImage(buildVolume(t, 0x2000, 0xFF, rawLogoFile(t, small, 0xFF))), big, ReplaceOptions{Compression: CompressLZMA}},
 		{"moved", buildImage(buildVolume(t, 0x20000, 0xFF, rawLogoFile(t, small, 0xFF), otherFile(t, 50, 0xFF))), makeBMP(100, 60, true), ReplaceOptions{}},
 		{"raw file", buildImage(buildVolume(t, 0x10000, 0xFF, mustFile(t, LogoFileGUID, FileTypeRaw, small, 0xFF))), big, ReplaceOptions{}},
 		{"lzma fallback", buildImage(buildVolume(t, 0x2000, 0xFF, rawLogoFile(t, small, 0xFF))), big, ReplaceOptions{}},

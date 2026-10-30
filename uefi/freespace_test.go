@@ -86,21 +86,31 @@ func TestUseFreeSpace(t *testing.T) {
 	if _, _, err := logos[0].StoredSize(img, ReplaceOptions{}); !errors.Is(err, errTooBig) {
 		t.Fatalf("image fits the logo volume: %v", err)
 	}
-	size, err := fs.StoredSize(logos[0], img)
-	if err != nil || size > fs.Capacity {
-		t.Fatalf("StoredSize %d of %d: %v", size, fs.Capacity, err)
-	}
-	p := replace(t, fw, img, ReplaceOptions{UseFreeSpace: true})
-	c := p.Changes[0]
-	if len(p.Logos) != 1 || p.Logos[0].Volume.Offset != fs.Volume.Offset || c.NewSize != size || c.Storage != StoredInFreeSpace {
-		t.Fatalf("logo not moved to the main volume: %+v", c)
-	}
-	// The old logo file is a pad file now; the other files are unchanged.
-	if p.Data[logos[0].File.Offset+18] != FileTypePad || !bytes.Contains(p.Data, otherFile(t, 10, 0xFF)) || !bytes.Contains(p.Data, otherFile(t, 100, 0xFF)) {
-		t.Fatal("old logo not removed, or another file changed")
-	}
-	if p.Logos[0].Name != "Logo" {
-		t.Fatalf("name %q", p.Logos[0].Name)
+	for _, c := range []struct {
+		compression Compression
+		storage     Storage
+		encoding    Encoding
+	}{
+		{CompressAsOriginal, StoredUncompressed, EncodingRawSection},
+		{CompressLZMA, StoredLZMAWrapped, EncodingLZMA},
+	} {
+		opt := ReplaceOptions{Compression: c.compression, UseFreeSpace: true}
+		size, storage, err := fs.StoredSize(logos[0], img, opt)
+		if err != nil || size > fs.Capacity || storage != c.storage {
+			t.Fatalf("%v: StoredSize %d of %d, %v: %v", c.storage, size, fs.Capacity, storage, err)
+		}
+		p := replace(t, fw, img, opt)
+		ch := p.Changes[0]
+		if len(p.Logos) != 1 || p.Logos[0].Volume.Offset != fs.Volume.Offset || ch.NewSize != size || ch.Storage != c.storage {
+			t.Fatalf("%v: logo not moved to the main volume: %+v", c.storage, ch)
+		}
+		if l := p.Logos[0]; l.Encoding != c.encoding || l.Name != "Logo" {
+			t.Fatalf("%v: read back as %v, name %q", c.storage, l.Encoding, l.Name)
+		}
+		// The old logo file is a pad file now; the other files are unchanged.
+		if p.Data[logos[0].File.Offset+18] != FileTypePad || !bytes.Contains(p.Data, otherFile(t, 10, 0xFF)) || !bytes.Contains(p.Data, otherFile(t, 100, 0xFF)) {
+			t.Fatalf("%v: old logo not removed, or another file changed", c.storage)
+		}
 	}
 }
 

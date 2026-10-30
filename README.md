@@ -58,11 +58,14 @@ go install github.com/lloesche/biosimage@latest
 ```
 biosimage info    FIRMWARE                       show where and how the logo is stored
 biosimage extract [-o FILE] FIRMWARE             save the current logo image
-biosimage replace [-o FILE] [-no-compress] [-free-space] [-force] FIRMWARE IMAGE
+biosimage replace [-o FILE] [-compress | -no-compress] [-free-space] [-force] FIRMWARE IMAGE
 ```
 
 - `replace` writes `FIRMWARE-logo.<ext>` unless `-o` is given; it never overwrites the input.
-- `-no-compress` stores the image uncompressed even if the original was LZMA-compressed.
+- The image is stored the way the original is: LZMA-compressed or not (and compressed anyway if it
+  only fits that way). `-compress` stores it LZMA-compressed, `-no-compress` uncompressed; the
+  web app has a **Store compressed** option for it. The firmware unpacks the logo when it
+  reads it, so both show the same.
 - `-free-space` moves the logo into the free space of the main volume (experimental, see
   [More space](#more-space-experimental)).
 - `-force` inserts the image despite warnings (see below), and writes the file despite an
@@ -123,8 +126,8 @@ fit.
 
 The logo's own space is small: 36 KiB to 388 KiB on the tested boards (see
 [Tested with](#tested-with)). The main volume (FV_MAIN) has megabytes free on all of them. The
-**Use free space** option of the web app (`replace -free-space`) adds the logo there as a new,
-uncompressed file and turns the original logo file into padding.
+**Use free space** option of the web app (`replace -free-space`) adds the logo there as a new
+file, stored the same way, and turns the original logo file into padding.
 
 This works because AMI's setup module, AMITSE, does not look for the logo in a particular
 place: it reads the logo file from whichever firmware volume has it. biosimage checks this in

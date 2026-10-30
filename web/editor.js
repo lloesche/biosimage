@@ -51,7 +51,10 @@ function encoded() {
 export const output = async () => (await encoded()).data;
 
 // storeOptions returns how replaceLogo is to store the logo.
-export const storeOptions = () => ({ freeSpace: !$('free-label').hidden && $('free-space').checked });
+export const storeOptions = () => ({
+  compress: !$('compress-label').hidden && $('compress').checked,
+  freeSpace: !$('free-label').hidden && $('free-space').checked,
+});
 
 async function encode() {
   const m = mode();
@@ -88,6 +91,9 @@ export function blocked() {
 // setFirmware adapts the editor to a newly loaded BIOS: the canvas size of its logo and the
 // formats known without reading the logo code (state.fwInfo.formats).
 export function setFirmware() {
+  const logo = state.fwInfo.logos[0];
+  $('compress').checked = logo.lzma; // like the original
+  $('compress-label').hidden = logo.rawFile; // a raw file cannot hold a compressed image
   $('bootguard-ok').checked = false;
   setFreeSpace(0);
   resetSize();
@@ -344,11 +350,12 @@ function showFit(fit) {
     const bar = $('space-bar');
     bar.style.width = `${Math.min(100, (size / capacity) * 100).toFixed(1)}%`;
     bar.classList.toggle('over', !fits);
-    $('space-size').textContent = `${fmtNum(size)} / ${fmtNum(capacity)} bytes`;
+    $('space-size').textContent = `${fmtNum(size)} / ${fmtNum(capacity)} bytes · ${fit.storage}`;
   }
-  const tip = { BMP: 'Choose JPEG, or make the canvas or the logo smaller.', JPEG: 'Lower the quality, or make the canvas smaller.',
-    GIF: 'Make the canvas or the logo smaller, or use an animation with fewer frames.', asis: 'Use a smaller file.' }[mode()] ||
-    'Choose JPEG, or make the canvas smaller.';
+  const tip = (!$('compress-label').hidden && !$('compress').checked ? 'Store it compressed. ' : '') +
+    ({ BMP: 'Choose JPEG, or make the canvas or the logo smaller.', JPEG: 'Lower the quality, or make the canvas smaller.',
+      GIF: 'Make the canvas or the logo smaller, or use an animation with fewer frames.', asis: 'Use a smaller file.' }[mode()] ||
+    'Choose JPEG, or make the canvas smaller.');
   setError($('space-error'), !ed.fit || fit.fits ? ''
     : fit.size > fit.capacity ? `The new logo does not fit: its file needs ${fmtNum(fit.size)} bytes and the BIOS has room for ${fmtNum(fit.capacity)}. ${tip}`
     : fit.error);
@@ -391,6 +398,7 @@ export function initEditor() {
   });
   $('force').addEventListener('change', () => emit('warnings'));
   $('free-space').addEventListener('change', refit);
+  $('compress').addEventListener('change', refit);
   $('bootguard-ok').addEventListener('change', () => emit('warnings'));
   updateControls();
 }

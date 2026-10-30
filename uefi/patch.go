@@ -8,12 +8,27 @@ import (
 
 // ReplaceOptions control how the new logo is stored.
 type ReplaceOptions struct {
-	// NoCompress stores the image uncompressed even if the original was compressed.
-	NoCompress bool
+	// Compression is how the image is stored. The firmware reads it either way: it reads the
+	// logo's raw section through any compression around it.
+	Compression Compression
 	// UseFreeSpace moves the logo into the free space of the main volume (Node.FreeSpace):
 	// the logo files are turned into pad files and one new file is added there. Experimental.
 	UseFreeSpace bool
 }
+
+// Compression says how ReplaceLogo stores the image.
+type Compression int
+
+const (
+	// CompressAsOriginal stores the image the way the original is stored, or LZMA-compressed if
+	// it only fits that way.
+	CompressAsOriginal Compression = iota
+	// CompressLZMA stores the image LZMA-compressed. A logo file that is raw data (rather than
+	// sections) cannot hold a compressed image.
+	CompressLZMA
+	// CompressNone stores the image uncompressed.
+	CompressNone
+)
 
 // Storage says how the new image was stored in the logo file.
 type Storage int
@@ -22,10 +37,10 @@ const (
 	StoredRawFile                Storage = iota // the file is the image
 	StoredUncompressed                          // raw section, as before
 	StoredLZMA                                  // raw section inside LZMA, as before
-	StoredUnwrapped                             // LZMA wrapper removed (ReplaceOptions.NoCompress)
+	StoredUnwrapped                             // LZMA wrapper removed (CompressNone)
 	StoredLZMAFallback                          // was uncompressed, but only fits compressed
 	StoredReplacingEncapsulation                // raw section in place of an undecodable one
-	StoredInFreeSpace                           // new file in the main volume (UseFreeSpace)
+	StoredLZMAWrapped                           // was not LZMA, compressed by request (CompressLZMA)
 )
 
 func (s Storage) String() string {
@@ -36,8 +51,52 @@ func (s Storage) String() string {
 		"stored uncompressed (LZMA wrapper removed)",
 		"stored LZMA-compressed (the original was uncompressed but the new image did not fit)",
 		"stored uncompressed (replaces the undecodable encapsulation)",
-		"stored uncompressed (original logo file removed)",
+		"stored LZMA-compressed (the original was not)",
 	}[s]
+}
+
+// compressed reports whether the image is in an LZMA section.
+func (s Storage) compressed() bool {
+	return s == StoredLZMA || s == StoredLZMAFallback || s == StoredLZMAWrapped
+}
+
+// errRawFileCompress is returned for CompressLZMA on a logo file that is raw data.
+var errRawFileCompress = errors.New("the logo file is raw data and cannot hold a compressed image")
+
+// storedAs returns how ReplaceLogo stores a new image in l's place with opt, before falling
+// back to LZMA for an image that only fits compressed.
+func (l *Logo) storedAs(opt ReplaceOptions) (Storage, error) {
+	lzma := opt.Compression == CompressLZMA
+	switch l.Encoding {
+	case EncodingRawFile:
+		if lzma {
+			return 0, errRawFileCompress
+		}
+		return StoredRawFile, nil
+	case EncodingRawSection:
+		if lzma {
+			return StoredLZMAWrapped, nil
+		}
+		return StoredUncompressed, nil
+	case EncodingLZMA:
+		if opt.Compression == CompressNone {
+			return StoredUnwrapped, nil
+		}
+		return StoredLZMA, nil
+	}
+	if lzma {
+		return StoredLZMAWrapped, nil
+	}
+	return StoredReplacingEncapsulation, nil
+}
+
+// lzmaSection returns sections b in an LZMA-compressed GUID-defined section.
+func lzmaSection(b []byte) ([]byte, error) {
+	payload, err := lzmaCompress(b, lzmaParams{props: lzmaDefaultProps, dict: lzmaDefaultDict}, 0)
+	if err != nil {
+		return nil, err
+	}
+	return newGuidedSection(LZMASectionGUID, guidedProcessingRequired, payload), nil
 }
 
 // Recompression is an enclosing compressed volume that was rebuilt around the new logo.
@@ -94,7 +153,7 @@ func ReplaceLogo(buf, img []byte, guid GUID, opt ReplaceOptions) (*Patch, error)
 	}
 	patch := &Patch{Data: out}
 	if opt.UseFreeSpace {
-		c, err := moveLogo(logos, img)
+		c, err := moveLogo(logos, img, opt)
 		if err != nil {
 			return nil, err
 		}
@@ -122,14 +181,18 @@ func ReplaceLogo(buf, img []byte, guid GUID, opt ReplaceOptions) (*Patch, error)
 // moveLogo turns the logo files into pad files and adds one with img to the free space of
 // the main volume (ReplaceOptions.UseFreeSpace). AMITSE reads the logo from whichever volume
 // has it.
-func moveLogo(logos []*Logo, img []byte) (Change, error) {
+func moveLogo(logos []*Logo, img []byte, opt ReplaceOptions) (Change, error) {
 	fs, err := logos[0].Node.Path()[0].FreeSpace()
 	if err != nil {
 		return Change{}, err
 	}
 	l := logos[0]
+	nf, storage, err := fs.logoFile(l, img, opt)
+	if err != nil {
+		return Change{}, err
+	}
 	c := Change{VolumeOffset: fs.Volume.Offset, OldOffset: l.File.Offset, OldSize: l.File.Size,
-		Storage: StoredInFreeSpace, Placement: PlacedFreeSpace}
+		Storage: storage, Placement: PlacedFreeSpace}
 	for _, l := range logos {
 		p := &patcher{logo: l.Node, before: map[*Buffer][]byte{}}
 		if err := p.placeFile(l.Node, buildPadFile(l.File.Size, l.Volume.EraseByte())); err != nil {
@@ -137,39 +200,56 @@ func moveLogo(logos []*Logo, img []byte) (Change, error) {
 		}
 		c.Recompressed = append(c.Recompressed, p.change.Recompressed...)
 	}
-	nf, err := freeSpaceFile(l, img, fs.Volume.Volume.EraseByte())
-	if err != nil {
-		return Change{}, err
-	}
 	p := &patcher{before: map[*Buffer][]byte{}}
 	c.NewSize = len(nf)
 	c.NewOffset, err = p.addFile(fs.Volume, nf, l.File.GUID, l.File.Alignment())
 	return c, err
 }
 
-// freeSpaceFile builds the logo file added by moveLogo: like l, with img uncompressed.
-func freeSpaceFile(l *Logo, img []byte, erase byte) ([]byte, error) {
-	data := img
-	if l.File.Type != FileTypeRaw {
-		data = NewSection(SectionRaw, img)
+// logoFile builds the logo file that moveLogo adds for img: like l, with img stored as
+// l.storedAs says, or LZMA-compressed if it only fits that way.
+func (fs *FreeSpace) logoFile(l *Logo, img []byte, opt ReplaceOptions) ([]byte, Storage, error) {
+	storage, err := l.storedAs(opt)
+	if err != nil {
+		return nil, 0, err
+	}
+	erase := fs.Volume.Volume.EraseByte()
+	build := func(storage Storage) ([]byte, error) {
+		if storage == StoredRawFile {
+			return BuildFile(l.File.GUID, l.File.Type, l.File.Attributes, img, erase)
+		}
+		data := NewSection(SectionRaw, img)
+		if storage.compressed() {
+			var err error
+			if data, err = lzmaSection(data); err != nil {
+				return nil, err
+			}
+		}
 		if l.Name != "" {
 			data = JoinSections(data, NewUISection(l.Name))
 		}
+		return BuildFile(l.File.GUID, l.File.Type, l.File.Attributes, data, erase)
 	}
-	return BuildFile(l.File.GUID, l.File.Type, l.File.Attributes, data, erase)
+	nf, err := build(storage)
+	if err == nil && len(nf) > fs.Capacity && storage == StoredUncompressed && opt.Compression == CompressAsOriginal {
+		storage = StoredLZMAFallback
+		nf, err = build(storage)
+	}
+	return nf, storage, err
 }
 
 // StoredSize returns the size of the logo file that ReplaceLogo with UseFreeSpace would add
-// for img, and an error (wrapping errTooBig) if it does not fit.
-func (fs *FreeSpace) StoredSize(l *Logo, img []byte) (int, error) {
-	nf, err := freeSpaceFile(l, img, fs.Volume.Volume.EraseByte())
+// for img, how the image would be stored, and an error (wrapping errTooBig) if it does not
+// fit.
+func (fs *FreeSpace) StoredSize(l *Logo, img []byte, opt ReplaceOptions) (int, Storage, error) {
+	nf, storage, err := fs.logoFile(l, img, opt)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	if len(nf) > fs.Capacity {
-		return len(nf), fmt.Errorf("%w: new logo file needs %d bytes but only %d are free in the main volume", errTooBig, len(nf), fs.Capacity)
+		return len(nf), storage, fmt.Errorf("%w: new logo file needs %d bytes but only %d are free in the main volume", errTooBig, len(nf), fs.Capacity)
 	}
-	return len(nf), nil
+	return len(nf), storage, nil
 }
 
 // independent ensures that no two logo files share a volume: patching one may move files in
@@ -225,39 +305,38 @@ type patcher struct {
 
 func (p *patcher) replace(l *Logo, img []byte, opt ReplaceOptions) (Change, error) {
 	p.change = Change{VolumeOffset: l.Volume.Offset, OldOffset: l.File.Offset, OldSize: l.File.Size}
+	storage, err := l.storedAs(opt)
+	if err != nil {
+		return p.change, err
+	}
+	p.change.Storage = storage
 	raw := NewSection(SectionRaw, img)
-	var err error
-	switch l.Encoding {
-	case EncodingRawFile:
-		p.change.Storage = StoredRawFile
+	switch storage {
+	case StoredRawFile:
 		var nf []byte
 		if nf, err = BuildFile(l.File.GUID, l.File.Type, l.File.Attributes, img, l.Volume.EraseByte()); err == nil {
 			err = p.placeFile(l.Node, nf)
 		}
-	case EncodingRawSection:
-		p.change.Storage = StoredUncompressed
+	case StoredLZMA: // into the original LZMA section
 		err = p.replaceSection(l.image, raw)
-		if errors.Is(err, errTooBig) && !opt.NoCompress {
-			// It only fits compressed. The firmware reads the raw section through any
-			// encapsulation, so wrap it in LZMA (nothing was written yet).
-			p.change.Storage = StoredLZMAFallback
-			var payload []byte
-			if payload, err = lzmaCompress(raw, lzmaParams{props: lzmaDefaultProps, dict: lzmaDefaultDict}, 0); err == nil {
-				err = p.replaceSection(l.image, newGuidedSection(LZMASectionGUID, guidedProcessingRequired, payload))
-			}
-		}
-	case EncodingLZMA:
-		p.change.Storage = StoredLZMA
-		if opt.NoCompress {
-			p.change.Storage = StoredUnwrapped
-			wrapper := l.image.Parent
-			err = p.replaceSection(wrapper, joinWith(wrapper.Children, l.image, raw))
-		} else {
-			err = p.replaceSection(l.image, raw)
+	case StoredUnwrapped:
+		wrapper := l.image.Parent
+		err = p.replaceSection(wrapper, joinWith(wrapper.Children, l.image, raw))
+	case StoredLZMAWrapped:
+		var sec []byte
+		if sec, err = lzmaSection(raw); err == nil {
+			err = p.replaceSection(l.image, sec)
 		}
 	default:
-		p.change.Storage = StoredReplacingEncapsulation
 		err = p.replaceSection(l.image, raw)
+		if errors.Is(err, errTooBig) && storage == StoredUncompressed && opt.Compression == CompressAsOriginal {
+			// It only fits compressed (nothing was written yet).
+			p.change.Storage = StoredLZMAFallback
+			var sec []byte
+			if sec, err = lzmaSection(raw); err == nil {
+				err = p.replaceSection(l.image, sec)
+			}
+		}
 	}
 	return p.change, err
 }

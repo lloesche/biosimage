@@ -58,9 +58,6 @@ func TestVendorFirmware(t *testing.T) {
 	if cache == "" {
 		t.Skip("set BIOSIMAGE_FIRMWARE_CACHE to a directory to download and test vendor firmware")
 	}
-	if err := os.MkdirAll(cache, 0o755); err != nil {
-		t.Fatal(err)
-	}
 	manifest, err := os.ReadFile(filepath.Join("..", "testdata", "firmware.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -214,6 +211,9 @@ func checkFreeSpace(t *testing.T, e vendorFirmware, root *Node, logos []*Logo, b
 func fetchFirmware(cache string, e vendorFirmware) ([]byte, error) {
 	zipPath := filepath.Join(cache, e.SHA256+".zip")
 	if !fileHasHash(zipPath, e.SHA256) {
+		if err := os.MkdirAll(cache, 0o755); err != nil {
+			return nil, err
+		}
 		if err := download(e.URL, zipPath); err != nil {
 			return nil, err
 		}

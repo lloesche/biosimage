@@ -26,9 +26,11 @@ permissions:
   pages: write
   id-token: write
 
+# Queue deployments instead of cancelling them: a commit and its tag pushed together start one
+# run for main and one after the release, and cancelling the first marks main as failed.
 concurrency:
   group: pages
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   driver:

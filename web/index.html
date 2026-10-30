@@ -101,12 +101,12 @@
             <p class="hint" id="formats-hint"></p>
             <p class="hint" id="mode-hint"></p>
             <fieldset id="layout">
-              <div class="field" data-help="Size of the logo bitmap in pixels (max. 800 × 600). It starts at the size of the original logo.&#10;&#10;Original: the size of the current logo, with the image at the default size in the centre. Source: the size of your image (scaled down to fit 800 × 600), drawn at 100 %.&#10;&#10;The firmware draws the bitmap unscaled and centred on a black screen.">
+              <div class="field" data-help="Size of the logo bitmap in pixels (max. 1920 × 1080). It starts at the size of the original logo.&#10;&#10;Original: the size of the current logo, with the image at the default size in the centre. Source: the size of your image (scaled down to fit 1920 × 1080), drawn at 100 %.&#10;&#10;The firmware draws the bitmap unscaled on a black screen: centred, or a little above the centre if it takes up at most 40 % of the screen's width and height. A logo larger than the screen is not shown at all.">
                 <span class="k">Canvas</span>
                 <span class="v">
-                  <span class="num">[<input type="number" id="cw" min="16" max="800" step="1" aria-label="Canvas width">]</span>
+                  <span class="num">[<input type="number" id="cw" min="16" max="1920" step="1" aria-label="Canvas width">]</span>
                   ×
-                  <span class="num">[<input type="number" id="ch" min="16" max="600" step="1" aria-label="Canvas height">]</span>
+                  <span class="num">[<input type="number" id="ch" min="16" max="1080" step="1" aria-label="Canvas height">]</span>
                   <button type="button" class="key" id="size-reset">[Original]</button>
                   <button type="button" class="key" id="size-source">[Source]</button>
                 </span>

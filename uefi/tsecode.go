@@ -3,6 +3,7 @@ package uefi
 import (
 	"bytes"
 	"encoding/binary"
+	"slices"
 
 	"golang.org/x/arch/x86/x86asm"
 )
@@ -19,6 +20,10 @@ type TSECode struct {
 	AnyVolumeLogo bool
 	// GIFMinDelay: the GIF player raises frame delays from 10 to 90 ms to 100 ms.
 	GIFMinDelay bool
+	// LogoFormats are the formats besides BMP that the boot logo code reads, of "JPEG", "PNG"
+	// and "GIF" in that order; nil if its format test was not found (logoFormats). The other
+	// decoders an AMITSE contains serve its setup screens, or no code at all.
+	LogoFormats []string
 }
 
 // TSECode disassembles AMITSE in the image.
@@ -28,15 +33,27 @@ func (n *Node) TSECode() TSECode {
 	if tse == nil {
 		return c
 	}
+	var formats map[string]bool
 	tse.Walk(func(s *Node) bool {
 		if s.Kind == KindSection && s.Section.Type == SectionPE32 {
 			if pe := parsePE64(s.Section.Body()); pe != nil {
 				c.AnyVolumeLogo = c.AnyVolumeLogo || pe.readsSectionFromEveryVolume()
 				c.GIFMinDelay = c.GIFMinDelay || pe.clampsGIFDelay()
+				if f := pe.logoFormats(); f != nil {
+					formats = f
+				}
 			}
 		}
 		return true
 	})
+	if formats != nil {
+		c.LogoFormats = []string{}
+		for _, f := range []string{"JPEG", "PNG", "GIF"} {
+			if formats[f] {
+				c.LogoFormats = append(c.LogoFormats, f)
+			}
+		}
+	}
 	return c
 }
 
@@ -229,4 +246,177 @@ func (pe *pe64) clampsGIFDelay() bool {
 		}
 	}
 	return false
+}
+
+// logoFormats returns the formats that AMITSE's boot logo code reads, found from the code: from
+// each place that names the logo file (LogoFileGUID as data, or built from immediates) it
+// follows branches and up to logoCallDepth calls to the first code that tests an image for
+// JPEG's start marker. That is AMI's format test, which the logo code runs on every image but
+// BMP; its signature checks are the formats it reads. Its GIF and PNG checks are compiled in
+// only with their decoders; the decoders AMITSE has besides serve its setup screens, or no
+// code at all. It returns nil if no format test was reached.
+func (pe *pe64) logoFormats() map[string]bool {
+	type call struct{ rva, depth int }
+	var queue []call
+	seen := map[int]bool{}
+	for _, r := range pe.logoGUIDUses() {
+		queue = append(queue, call{r, 0})
+		seen[r] = true
+	}
+	var formats map[string]bool
+	for budget := 200000; len(queue) > 0 && budget > 0; {
+		c := queue[0]
+		queue = queue[1:]
+		insts, calls := pe.flow(c.rva, 4000)
+		budget -= len(insts)
+		if f := pe.formatTest(insts); f != nil {
+			if formats == nil {
+				formats = map[string]bool{}
+			}
+			for k := range f {
+				formats[k] = true
+			}
+			continue
+		}
+		if c.depth < logoCallDepth {
+			for _, t := range calls {
+				if !seen[t] {
+					seen[t] = true
+					queue = append(queue, call{t, c.depth + 1})
+				}
+			}
+		}
+	}
+	return formats
+}
+
+// logoCallDepth is how many calls logoFormats follows: the format test is up to three calls
+// away from where the logo file is named on the tested boards.
+const logoCallDepth = 4
+
+// logoGUIDUses returns the addresses of the instructions that address LogoFileGUID or build it
+// on the stack (by its first 32 bits).
+func (pe *pe64) logoGUIDUses() []int {
+	var uses []int
+	for at := bytes.Index(pe.b, LogoFileGUID[:]); at >= 0; {
+		if target := pe.rva(at); target >= 0 {
+			for _, r := range pe.refsTo(target) {
+				uses = append(uses, pe.rva(r))
+			}
+		}
+		next := bytes.Index(pe.b[at+1:], LogoFileGUID[:])
+		if next < 0 {
+			break
+		}
+		at += 1 + next
+	}
+	first := int64(binary.LittleEndian.Uint32(LogoFileGUID[:]))
+	for _, s := range pe.sections {
+		if !s.code {
+			continue
+		}
+		for i := s.raw; i+4 <= s.raw+s.size; i++ {
+			if binary.LittleEndian.Uint32(pe.b[i:]) != uint32(first) {
+				continue
+			}
+			for start := i - 2; start >= max(s.raw, i-8); start-- { // mov [mem], imm32 ends with it
+				if inst, err := x86asm.Decode(pe.b[start:], 64); err == nil && start+inst.Len == i+4 && hasImm(inst, first) {
+					uses = append(uses, pe.rva(start))
+					break
+				}
+			}
+		}
+	}
+	return uses
+}
+
+// placed is an instruction and its address.
+type placed struct {
+	x86asm.Inst
+	pc int
+}
+
+// flow returns up to limit instructions reachable from rva through jumps and branches, and the
+// targets of the direct calls among them. It does not follow indirect jumps.
+func (pe *pe64) flow(rva, limit int) (insts []placed, calls []int) {
+	seen := map[int]bool{}
+	work := []int{rva}
+	for len(work) > 0 && len(insts) < limit {
+		pc := work[len(work)-1]
+		work = work[:len(work)-1]
+		for !seen[pc] && len(insts) < limit {
+			off := pe.offset(pc)
+			if off < 0 {
+				break
+			}
+			inst, err := x86asm.Decode(pe.b[off:], 64)
+			if err != nil {
+				break
+			}
+			seen[pc] = true
+			insts = append(insts, placed{inst, pc})
+			next := pc + inst.Len
+			rel, direct := inst.Args[0].(x86asm.Rel)
+			if direct {
+				switch {
+				case inst.Op == x86asm.CALL:
+					calls = append(calls, next+int(rel))
+				case inst.Op == x86asm.JMP || inst.Op >= x86asm.JA && inst.Op <= x86asm.JS:
+					work = append(work, next+int(rel))
+				}
+			}
+			if inst.Op == x86asm.RET || inst.Op == x86asm.JMP || inst.Op == x86asm.INT || inst.Op == x86asm.UD2 {
+				break
+			}
+			pc = next
+		}
+	}
+	return insts, calls
+}
+
+// formatTest returns the formats that insts test images for, if they are a format test: one
+// that compares the first 16 bits with JPEG's start marker (FF D8). It recognizes PNG by its
+// signature's second byte or first 32 bits, and GIF by the "GIF87a"/"GIF89a" it compares with.
+func (pe *pe64) formatTest(insts []placed) map[string]bool {
+	if !slices.ContainsFunc(insts, func(i placed) bool { return hasImm(i.Inst, 0xd8ff) || hasImm(i.Inst, -0x2701) }) {
+		return nil
+	}
+	f := map[string]bool{"JPEG": true}
+	for _, i := range insts {
+		m, isMem := memArg(i.Inst)
+		switch {
+		case hasImm(i.Inst, 0x474e5089), i.Op == x86asm.CMP && isMem && m.Disp == 1 && hasImm(i.Inst, 0x50):
+			f["PNG"] = true
+		case i.Op == x86asm.LEA && isMem && m.Base == x86asm.RIP:
+			if off := pe.offset(i.pc + i.Len + int(m.Disp)); off >= 0 && off+6 <= len(pe.b) {
+				if s := string(pe.b[off : off+6]); s == "GIF87a" || s == "GIF89a" {
+					f["GIF"] = true
+				}
+			}
+		}
+	}
+	return f
+}
+
+// offset returns the file offset of address rva, or -1.
+func (pe *pe64) offset(rva int) int {
+	for _, s := range pe.sections {
+		if rva >= s.rva && rva < s.rva+s.size {
+			return rva - s.rva + s.raw
+		}
+	}
+	return -1
+}
+
+func hasImm(inst x86asm.Inst, v int64) bool {
+	return slices.ContainsFunc(inst.Args[:], func(a x86asm.Arg) bool { i, ok := a.(x86asm.Imm); return ok && int64(i) == v })
+}
+
+func memArg(inst x86asm.Inst) (x86asm.Mem, bool) {
+	for _, a := range inst.Args {
+		if m, ok := a.(x86asm.Mem); ok {
+			return m, true
+		}
+	}
+	return x86asm.Mem{}, false
 }

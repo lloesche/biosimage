@@ -17,8 +17,10 @@ type ImageInfo struct {
 	Warnings []string
 }
 
-// Recommended maximum logo size; larger logos are not shown by some AMI builds.
-const maxLogoWidth, maxLogoHeight = 800, 600
+// Recommended maximum logo size. AMITSE draws no logo larger than the screen: it switches to
+// the screen mode closest to the logo's size, and skips the logo if it is still larger. Most
+// screens start at 1920x1080 or more.
+const maxLogoWidth, maxLogoHeight = 1920, 1080
 
 // InspectImage identifies a BMP/PNG/JPEG/GIF image and flags properties that AMI's
 // built-in decoders are known not to handle.
@@ -44,7 +46,7 @@ func InspectImage(b []byte) (*ImageInfo, error) {
 	}
 	info.Frames = max(info.Frames, 1)
 	if info.Width > maxLogoWidth || info.Height > maxLogoHeight {
-		info.Warnings = append(info.Warnings, fmt.Sprintf("larger than %dx%d; some firmware refuses to show such logos", maxLogoWidth, maxLogoHeight))
+		info.Warnings = append(info.Warnings, fmt.Sprintf("larger than %dx%d; the firmware shows no logo larger than the screen", maxLogoWidth, maxLogoHeight))
 	}
 	return info, nil
 }

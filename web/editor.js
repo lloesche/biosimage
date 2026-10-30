@@ -11,8 +11,9 @@ import { call } from './wasm.js';
 
 // Firmware draws the logo unscaled; the preview shows it on a screen of this width.
 const PREVIEW_SCREEN_WIDTH = 1920;
-const MAX_W = 800;
-const MAX_H = 600;
+// The largest logo: the firmware shows none larger than the screen (uefi.InspectImage).
+const MAX_W = 1920;
+const MAX_H = 1080;
 const DEFAULT_SIZE = [672, 378];
 
 const ed = {
@@ -85,7 +86,7 @@ export function blocked() {
 // ---------- firmware and formats ----------
 
 // setFirmware adapts the editor to a newly loaded BIOS: the canvas size of its logo and the
-// formats known without looking for decoders (state.fwInfo.formats).
+// formats known without reading the logo code (state.fwInfo.formats).
 export function setFirmware() {
   $('bootguard-ok').checked = false;
   setFreeSpace(0);
@@ -95,7 +96,7 @@ export function setFirmware() {
   render();
 }
 
-// setDetectedFormats offers the formats found by looking for decoders, keeping the chosen one.
+// setDetectedFormats offers the formats the logo code reads, keeping the chosen one.
 export function setDetectedFormats(formats) {
   const before = mode();
   showFormats(formats, true);
@@ -104,7 +105,7 @@ export function setDetectedFormats(formats) {
 }
 
 // setFreeSpace offers to move the logo into free space of this many bytes (none if 0), found
-// with the decoders.
+// with the formats.
 export function setFreeSpace(capacity) {
   $('free-label').hidden = !capacity;
   if (!capacity) $('free-space').checked = false;
@@ -131,7 +132,7 @@ function showFormats(formats, detected) {
       el('span', { textContent: f.format })), ' ']));
   if (asis) document.querySelector('input[name=mode][value=asis]').checked = true;
   $('formats-hint').textContent = 'This BIOS can show ' + formats.map((f) => `${f.format} (${f.reason})`).join(', ') +
-    (detected ? '.' : '; looking for more decoders…');
+    (detected ? '.' : '; checking which formats its logo code reads…');
 }
 
 const offered = (format) => document.querySelector(`#formats input[value=${format}]`);

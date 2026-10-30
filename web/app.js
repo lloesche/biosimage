@@ -92,7 +92,8 @@ async function loadFirmware(file) {
   updateBuild();
   updateTabs();
   showHelp('BIOS file loaded.\n\nNext: drop the new logo image under “New Logo”.');
-  // Detecting the image decoders may decompress the whole image; it runs in the background.
+  // Reading the logo code for its formats may decompress the whole image; it runs in the
+  // background.
   const res = await call('logoFormats', [info.id]);
   if (load !== fwLoads || res.error) return;
   setDetectedFormats(res.formats);

@@ -626,8 +626,7 @@ func TestEncodeImage(t *testing.T) {
 
 func TestLogoFormats(t *testing.T) {
 	logo := rawLogoFile(t, makeBMP(8, 8, false), 0xFF)
-	module := append(u16le(0, 1, 5, 6, 14, 15, 27, 28, 2, 4, 7, 13, 16, 26, 29, 42), "..RDHI.."...)
-	tse := mustFile(t, tseFileGUID, 0x07, NewSection(SectionPE32, module), 0xFF)
+	tse := tseFile(t, logoCode(0, true, false))
 	for _, c := range []struct {
 		files []byte
 		want  string

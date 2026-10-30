@@ -28,7 +28,7 @@ Signed:   YES (AMI Aptio capsule)
           Q-Flash, ASRock Instant Flash) rejects it because it no longer matches the
           signature.
 Volumes:  5 top-level firmware volume(s)
-Formats:  BMP (current logo), JPEG (decoder found), PNG (decoder found), GIF (decoder found)
+Formats:  BMP (current logo), JPEG (logo code reads it)
 Free:     3739072 bytes in the main volume at 0x1001000 for a logo moved there
           (experimental: replace -free-space)
 
@@ -71,22 +71,30 @@ biosimage replace [-o FILE] [-no-compress] [-free-space] [-force] FIRMWARE IMAGE
 
 ## Preparing the image
 
-AMI's setup module (AMITSE) contains decoders for BMP, JPEG, PNG and GIF and picks one by
-looking at the file's first bytes. Which of them a vendor builds in varies: on the tested boards
-BMP, JPEG and GIF are always there, PNG only on some. `biosimage info` lists the formats a BIOS
-can show: BMP and the format of the current logo always, the others when their decoder is
-found in AMITSE (best effort, by the tables and signatures the decoders use). The web app
+AMI's setup module (AMITSE) draws the logo. It reads BMP itself and passes every other image to
+a format test that looks at the file's first bytes. Which formats the test knows depends on how
+the vendor built AMITSE: on the tested boards JPEG always, PNG and GIF only on some (see
+[Tested with](#tested-with)). An AMITSE often contains more decoders than its logo code uses,
+for its setup screens or as dead code, so biosimage reads the logo code itself: it disassembles
+AMITSE, follows the code from where it names the logo file to the format test, and reads which
+signatures the test compares. `biosimage info` lists the formats a BIOS can show: BMP and the
+format of the current logo always, the others when the logo code reads them. The web app
 offers these formats and starts with the format of the current logo; JPEG is much smaller than
 BMP, which matters where the logo is stored uncompressed or space is tight. While you edit, it
 shows how much space the new logo file takes in the BIOS, stored the way the patched BIOS will
 store it, and tells you before you build if it does not fit. For the most predictable result:
 
-- Use a **24-bit uncompressed BMP** on a black background, about the size of the original
-  logo (`biosimage info` shows it). Stay at or below 800x600.
+- Use a **24-bit uncompressed BMP** on a black background.
+- Size: the logo must not be larger than the screen while the board starts. AMITSE switches to
+  the screen mode closest to the logo's size and shows no logo if it is still larger, so stay
+  at or below 1920x1080. A logo of at most 40 % of the screen's width and height is drawn a
+  little above the centre (its middle at 38 % of the height), a larger one centred. The
+  original logos are sized for this: ASUS's 672x378 is 35 % of 1920x1080. (Traced in the
+  AMITSE of the ASUS TUF GAMING B850I WIFI NEO.)
 - PNG: 8- or 16-bit, **no alpha channel**, not interlaced.
 - JPEG: **baseline** (not progressive), 1:1 pixel density.
-- GIF: animated GIFs are played by AMITSE (min. 100 ms per frame, no disposal methods,
-  endless loop), but a vendor's boot path may show only the first frame. It plays only while
+- GIF: where the logo code reads GIF, AMITSE plays animated GIFs (min. 100 ms per frame, no
+  disposal methods, endless loop), but a vendor's boot path may show only the first frame. It plays only while
   the board starts up (POST), usually a few seconds. The web app's GIF
   output takes care of this: it places every frame on the canvas, uses one palette of up to
   256 colours and needs no disposal method, as every frame is opaque and drawn over the last.
@@ -128,8 +136,8 @@ been tried on a running board yet, so keep a recovery path. If it does not work,
 board to boot without a logo.
 
 The same way, the vendor tests check that AMITSE plays GIF animations at no more than 10 frames
-per second (delays under 100 ms are raised to 100 ms). It finds this limit in 18 of the 20 tested
-BIOSes; for the NUC 14 Pro and the EVGA Z790 DARK, how they time frames is unknown.
+per second (delays under 100 ms are raised to 100 ms). All 10 tested BIOSes whose logo code
+reads GIF have this limit.
 
 ### Intel Boot Guard
 
@@ -208,28 +216,28 @@ These images are tested by the [vendor firmware workflow](.github/workflows/firm
 whenever the parsing code or the list changes. It downloads them from the vendors' servers
 and checks them against pinned hashes (see [`testdata/firmware.json`](testdata/firmware.json)).
 
-| Vendor | Board | Platform | BIOS | Logo | Space | Free space | Result |
-|---|---|---|---|---|---|---|---|
-| ASUS | TUF GAMING B850I WIFI NEO | AM5 | 1804 | logo volume | 248 KiB | 3.6 MiB | ✅ patched and flashed via USB BIOS FlashBack |
-| ASUS | TUF GAMING B550-PLUS | AM4 | 3645 | logo volume, 2 copies | 148 KiB | 6.4 MiB | ✅ patched |
-| ASUS | PRIME Z790-P | Intel LGA1700 | 1836 | logo volume | 225 KiB | 2.8 MiB | ✅ patched |
-| ASUS | PRIME Z890-P | Intel LGA1851 | 3212 | logo volume | 348 KiB | 3.8 MiB | ✅ patched |
-| ASUS | NUC 14 Pro (NUC14RV) | Intel Meteor Lake | 0044 | nested volume | 256 KiB | – | ✅ patched |
-| MSI | MAG B650 TOMAHAWK WIFI | AM5 | 7D75v1R3 | nested volume | 320 KiB | 5.0 MiB | ✅ patched |
-| MSI | B450 TOMAHAWK MAX | AM4 | 7C02v3M5 | compressed main volume, 2 copies | 78 KiB | 2.9 MiB | ✅ patched |
-| MSI | PRO Z790-A WIFI | Intel LGA1700 | 7E07vAJ | compressed main volume | 61 KiB | 1.9 MiB | ✅ patched |
-| MSI | MAG Z890 TOMAHAWK WIFI | Intel LGA1851 | 7E32v1AD | compressed main volume | 36 KiB | 2.3 MiB | ✅ patched |
-| MSI | MPG Z490 GAMING EDGE WIFI | Intel LGA1200 | 7C79v1F1 | compressed main volume | 227 KiB | 3.9 MiB | ✅ patched |
-| Gigabyte | X870 AORUS ELITE WIFI7 | AM5 | F13g | nested volume | 128 KiB | 6.4 MiB | ✅ patched |
-| Gigabyte | B550 AORUS ELITE V2 | AM4 | F20c | nested volume, 2 copies | 128 KiB | 4.2 MiB | ✅ patched |
-| Gigabyte | Z790 AORUS ELITE AX | Intel LGA1700 | FP | nested volume | 128 KiB | 5.4 MiB | ✅ patched |
-| Gigabyte | Z490 AORUS ELITE | Intel LGA1200 | F25a | nested volume | 128 KiB | 2.0 MiB | ✅ patched |
-| ASRock | B650M Pro RS | AM5 | 4.60 | nested volume | 128 KiB | 3.5 MiB | ✅ patched |
-| ASRock | Z790 Pro RS | Intel LGA1700 | 19.03 | nested volume | 128 KiB | 246 KiB | ✅ patched |
-| Biostar | B650M-SILVER | AM5 | B65BQ730 | compressed main volume | 388 KiB | 4.5 MiB | ✅ patched |
-| Sapphire | NITRO+ B850A WIFI 7 | AM5 | AM50N101R30 | nested volume | 128 KiB | 4.8 MiB | ✅ patched |
-| NZXT | N7 Z890 | Intel LGA1851 | 3.13 | nested volume | 128 KiB | 5.2 MiB | ✅ patched |
-| EVGA | Z790 DARK K\|NGP\|N | Intel LGA1700 | 1.11 | compressed main volume, uncompressed logo | 50 KiB | 3.9 MiB | ✅ patched |
+| Vendor | Board | Platform | BIOS | Logo | Space | Free space | Formats | Result |
+|---|---|---|---|---|---|---|---|---|
+| ASUS | TUF GAMING B850I WIFI NEO | AM5 | 1804 | logo volume | 248 KiB | 3.6 MiB | BMP, JPEG | ✅ patched and flashed via USB BIOS FlashBack |
+| ASUS | TUF GAMING B550-PLUS | AM4 | 3645 | logo volume, 2 copies | 148 KiB | 6.4 MiB | BMP, JPEG | ✅ patched |
+| ASUS | PRIME Z790-P | Intel LGA1700 | 1836 | logo volume | 225 KiB | 2.8 MiB | BMP, JPEG | ✅ patched |
+| ASUS | PRIME Z890-P | Intel LGA1851 | 3212 | logo volume | 348 KiB | 3.8 MiB | BMP, JPEG | ✅ patched |
+| ASUS | NUC 14 Pro (NUC14RV) | Intel Meteor Lake | 0044 | nested volume | 256 KiB | – | BMP | ✅ patched |
+| MSI | MAG B650 TOMAHAWK WIFI | AM5 | 7D75v1R3 | nested volume | 320 KiB | 5.0 MiB | BMP, JPEG, GIF | ✅ patched |
+| MSI | B450 TOMAHAWK MAX | AM4 | 7C02v3M5 | compressed main volume, 2 copies | 78 KiB | 2.9 MiB | BMP, JPEG, GIF | ✅ patched |
+| MSI | PRO Z790-A WIFI | Intel LGA1700 | 7E07vAJ | compressed main volume | 61 KiB | 1.9 MiB | BMP, JPEG, GIF | ✅ patched |
+| MSI | MAG Z890 TOMAHAWK WIFI | Intel LGA1851 | 7E32v1AD | compressed main volume | 36 KiB | 2.3 MiB | BMP, JPEG, PNG | ✅ patched |
+| MSI | MPG Z490 GAMING EDGE WIFI | Intel LGA1200 | 7C79v1F1 | compressed main volume | 227 KiB | 3.9 MiB | BMP, JPEG, GIF | ✅ patched |
+| Gigabyte | X870 AORUS ELITE WIFI7 | AM5 | F13g | nested volume | 128 KiB | 6.4 MiB | BMP, JPEG, PNG, GIF | ✅ patched |
+| Gigabyte | B550 AORUS ELITE V2 | AM4 | F20c | nested volume, 2 copies | 128 KiB | 4.2 MiB | BMP, JPEG, PNG, GIF | ✅ patched |
+| Gigabyte | Z790 AORUS ELITE AX | Intel LGA1700 | FP | nested volume | 128 KiB | 5.4 MiB | BMP, JPEG, PNG, GIF | ✅ patched |
+| Gigabyte | Z490 AORUS ELITE | Intel LGA1200 | F25a | nested volume | 128 KiB | 2.0 MiB | BMP, JPEG, PNG, GIF | ✅ patched |
+| ASRock | B650M Pro RS | AM5 | 4.60 | nested volume | 128 KiB | 3.5 MiB | BMP, JPEG, PNG | ✅ patched |
+| ASRock | Z790 Pro RS | Intel LGA1700 | 19.03 | nested volume | 128 KiB | 246 KiB | BMP, JPEG, PNG, GIF | ✅ patched |
+| Biostar | B650M-SILVER | AM5 | B65BQ730 | compressed main volume | 388 KiB | 4.5 MiB | BMP, JPEG | ✅ patched |
+| Sapphire | NITRO+ B850A WIFI 7 | AM5 | AM50N101R30 | nested volume | 128 KiB | 4.8 MiB | BMP, JPEG | ✅ patched |
+| NZXT | N7 Z890 | Intel LGA1851 | 3.13 | nested volume | 128 KiB | 5.2 MiB | BMP, JPEG, PNG, GIF | ✅ patched |
+| EVGA | Z790 DARK K\|NGP\|N | Intel LGA1700 | 1.11 | compressed main volume, uncompressed logo | 50 KiB | 3.9 MiB | BMP, JPEG, PNG | ✅ patched |
 
 "Patched" means the image is patched and fully verified on the file level; only the first board
 has been flashed so far.

@@ -20,7 +20,7 @@ const usage = `biosimage - replace the boot logo in AMI Aptio / UEFI firmware im
 Usage:
   biosimage info    FIRMWARE
   biosimage extract [-o FILE] FIRMWARE
-  biosimage replace [-o FILE] [-no-compress] [-force] FIRMWARE IMAGE
+  biosimage replace [-o FILE] [-no-compress] [-free-space] [-force] FIRMWARE IMAGE
   biosimage version
 
 FIRMWARE is a BIOS file as downloaded from the vendor (e.g. ASUS .CAP) or a raw
@@ -132,6 +132,13 @@ func cmdInfo(w io.Writer, args []string) error {
 		formats = append(formats, fmt.Sprintf("%s (%s)", f.Format, f.Reason()))
 	}
 	fmt.Fprintf(w, "Formats:  %s\n", strings.Join(formats, ", "))
+	if free, err := root.FreeSpace(); err == nil {
+		fmt.Fprintf(w, "Free:     %d bytes in the main volume at %#x for a logo moved there\n"+
+			"          (experimental: replace -free-space)\n", free.Capacity, free.Volume.Offset)
+	}
+	if note := uefi.DetectBootGuard(buf).Note(); note != "" {
+		fmt.Fprintf(w, "BootGuard: %s\n", strings.TrimSpace(wrap(note, "           ", 90)))
+	}
 	for i, l := range logos {
 		fmt.Fprintf(w, "\nLogo %d:   file %s at %#x (%d bytes) in volume at %#x (%d KiB)\n",
 			i+1, l.File.GUID, l.File.Offset, l.File.Size, l.Volume.Offset, l.Volume.Length>>10)
@@ -201,7 +208,8 @@ func cmdReplace(w io.Writer, args []string) error {
 	fs := flag.NewFlagSet("replace", flag.ContinueOnError)
 	out := fs.String("o", "", "output file (default: FIRMWARE with -logo added to the name)")
 	noCompress := fs.Bool("no-compress", false, "store the image uncompressed")
-	force := fs.Bool("force", false, "continue despite image warnings")
+	freeSpace := fs.Bool("free-space", false, "move the logo into the free space of the main volume (experimental)")
+	force := fs.Bool("force", false, "continue despite image and Boot Guard warnings")
 	guidStr := guidFlag(fs)
 	pos, err := parse(fs, args, 2)
 	if err != nil {
@@ -251,9 +259,15 @@ func cmdReplace(w io.Writer, args []string) error {
 		}
 	}
 
-	p, err := uefi.ReplaceLogo(buf, img, guid, uefi.ReplaceOptions{NoCompress: *noCompress})
+	p, err := uefi.ReplaceLogo(buf, img, guid, uefi.ReplaceOptions{NoCompress: *noCompress, UseFreeSpace: *freeSpace})
 	if err != nil {
 		return err
+	}
+	if p.BootGuardWarning != "" {
+		fmt.Fprintf(w, "warning: %s\n", strings.TrimSpace(wrap(p.BootGuardWarning, "         ", 90)))
+		if !*force {
+			return errors.New("not written; use -force if you have a recovery path")
+		}
 	}
 	for _, c := range p.Changes {
 		fmt.Fprintf(w, "Logo:   volume %#x: file at %#x, %d -> %d bytes, %s, %s\n",

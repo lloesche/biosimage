@@ -1,14 +1,22 @@
 name: Pages
 
-# Deploys web/ to GitHub Pages together with the WebAssembly module of the latest release.
-# Runs after every successful release, when the web app changes, or manually.
+# Deploys web/ to GitHub Pages with the WebAssembly module built from the same commit, so the
+# page and the module always match. Runs when either changes on main, after every successful
+# release (so the footer shows the new tag), or manually.
 on:
   workflow_run:
     workflows: [Release]
     types: [completed]
   push:
     branches: [main]
-    paths: ["web/**", ".github/workflows/pages.yml"]
+    paths:
+      - "web/**"
+      - "uefi/**"
+      - "cmd/wasm/**"
+      - "cmd/buildweb/**"
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/pages.yml"
   workflow_dispatch:
 
 permissions:
@@ -31,27 +39,14 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: main
-      - name: Fetch WebAssembly module from the latest release
-        id: release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          if tag=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName -q .tagName 2>/dev/null); then
-            gh release download "$tag" --repo "$GITHUB_REPOSITORY" --dir web \
-              --pattern biosimage.wasm --pattern wasm_exec.js
-            echo "$tag" > web/version.txt
-            echo "built=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "No release yet, building from source"
-            echo "built=true" >> "$GITHUB_OUTPUT"
-          fi
+          fetch-depth: 0 # tags, for the version
       - uses: actions/setup-go@v7
-        if: steps.release.outputs.built == 'true'
         with:
           go-version-file: go.mod
-      - name: Build WebAssembly module from source
-        if: steps.release.outputs.built == 'true'
-        run: go run ./cmd/buildweb -version "dev-$(git rev-parse --short HEAD)"
+      # The version (e.g. v1.4.0, or v1.4.0-3-g0b465ba after it) is in the footer and in the
+      # URLs of the worker and the module, so a new deployment does not use cached old ones.
+      - name: Build WebAssembly module
+        run: go run ./cmd/buildweb -version "$(git describe --tags --always)"
       - uses: actions/configure-pages@v6
       - uses: actions/upload-pages-artifact@v5
         with:

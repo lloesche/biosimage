@@ -14,7 +14,10 @@
       "encoding": "LZMA-compressed section",
       "image": "BMP 672x378",
       "formats": "BMP JPEG PNG GIF",
-      "capacity": 253792
+      "capacity": 253792,
+      "freeSpace": 3739072,
+      "anyVolumeLogo": true,
+      "gifMinDelay": true
     }
   },
   {
@@ -32,7 +35,10 @@
       "encoding": "LZMA-compressed section",
       "image": "BMP 672x378",
       "formats": "BMP JPEG GIF",
-      "capacity": 151304
+      "capacity": 151304,
+      "freeSpace": 6679048,
+      "anyVolumeLogo": true,
+      "gifMinDelay": true
     }
   },
   {
@@ -50,7 +56,10 @@
       "encoding": "LZMA-compressed section",
       "image": "BMP 672x378",
       "formats": "BMP JPEG PNG GIF",
-      "capacity": 229968
+      "capacity": 229968,
+      "freeSpace": 2933680,
+      "anyVolumeLogo": true,
+      "gifMinDelay": true
     }
   },
   {
@@ -62,7 +71,10 @@
       "image": "BMP 672x378",
       "formats": "BMP JPEG PNG GIF",
       "logos": 1,
-      "signed": true
+      "signed": true,
+      "freeSpace": 3955496,
+      "anyVolumeLogo": true,
+      "gifMinDelay": true
     },
     "file": "PRIME-Z890-P-ASUS-3212.CAP",
     "platform": "Intel LGA1851",
@@ -80,7 +92,8 @@
       "image": "BMP 448x142",
       "formats": "BMP",
       "logos": 1,
-      "signed": true
+      "signed": true,
+      "bootGuard": "manifests"
     },
     "file": "RVRPLR30.0044.CAP",
     "platform": "Intel Core Ultra (Meteor Lake)",
@@ -104,7 +117,10 @@
       "encoding": "LZMA-compressed section",
       "image": "BMP 409x307",
       "formats": "BMP JPEG PNG GIF",
-      "capacity": 327560
+      "capacity": 327560,
+      "freeSpace": 5205848,
+      "anyVolumeLogo": true,
+      "gifMinDelay": true
     }
   },
   {
@@ -123,7 +139,10 @@
       "image": "BMP 409x307",
       "formats": "BMP JPEG PNG GIF",
       "capacity": 62880,
-      "inCompressedVolume": true
+      "inCompressedVolume": true,
+      "freeSpace": 2019400,
+      "anyVolumeLogo": true,
+      "gifMinDelay": true
     }
   },
   {
@@ -136,7 +155,10 @@
       "formats": "BMP JPEG PNG GIF",
       "inCompressedVolume": true,
       "logos": 1,
-      "signed": true
+      "signed": true,
+      "freeSpace": 2372512,
+      "anyVolumeLogo": true,
+      "gifMinDelay": true
     },
     "file": "E7E32IMSI.1AD0",
     "platform": "Intel LGA1851",
@@ -155,7 +177,10 @@
       "formats": "BMP JPEG GIF",
       "inCompressedVolume": true,
       "logos": 2,
-      "signed": false
+      "signed": false,
+      "freeSpace": 3059576,
+      "anyVolumeLogo": true,
+      "gifMinDelay": true
     },
     "file": "E7C02AMS.3M5",
     "platform": "AM4",
@@ -174,7 +199,10 @@
       "formats": "BMP JPEG GIF",
       "inCompressedVolume": true,
       "logos": 1,
-      "signed": false
+      "signed": false,
+      "freeSpace": 4047800,
+      "anyVolumeLogo": true,
+      "gifMinDelay": true
     },
     "file": "E7C79IMS.1F1",
     "platform": "Intel LGA1200",
@@ -198,7 +226,10 @@
       "encoding": "LZMA-compressed section",
       "image": "BMP 293x400",
       "formats": "BMP JPEG PNG GIF",
-      "capacity": 130952
+      "capacity": 130952,
+      "freeSpace": 4431040,
+      "anyVolumeLogo": true,
+      "gifMinDelay": true
     }
   },
   {
@@ -216,7 +247,11 @@
       "encoding": "LZMA-compressed section",
       "image": "JPEG 496x533",
       "formats": "BMP JPEG PNG GIF",
-      "capacity": 130952
+      "capacity": 130952,
+      "freeSpace": 5616640,
+      "bootGuard": "manifests, hash",
+      "anyVolumeLogo": true,
+      "gifMinDelay": true
     }
   },
   {
@@ -228,7 +263,10 @@
       "image": "BMP 293x400",
       "formats": "BMP JPEG PNG GIF",
       "logos": 1,
-      "signed": true
+      "signed": true,
+      "freeSpace": 6678888,
+      "anyVolumeLogo": true,
+      "gifMinDelay": true
     },
     "file": "X870AELITEWIFI7.F13g",
     "platform": "AM5",
@@ -246,7 +284,10 @@
       "image": "JPEG 496x533",
       "formats": "BMP JPEG PNG GIF",
       "logos": 1,
-      "signed": true
+      "signed": true,
+      "freeSpace": 2048040,
+      "anyVolumeLogo": true,
+      "gifMinDelay": true
     },
     "file": "Z490AORUSELITE.F25a",
     "platform": "Intel LGA1200",
@@ -270,7 +311,10 @@
       "encoding": "LZMA-compressed section",
       "image": "JPEG 424x208",
       "formats": "BMP JPEG PNG GIF",
-      "capacity": 130952
+      "capacity": 130952,
+      "freeSpace": 3646704,
+      "anyVolumeLogo": true,
+      "gifMinDelay": true
     }
   },
   {
@@ -282,7 +326,10 @@
       "image": "JPEG 424x208",
       "formats": "BMP JPEG PNG GIF",
       "logos": 1,
-      "signed": true
+      "signed": true,
+      "freeSpace": 251488,
+      "anyVolumeLogo": true,
+      "gifMinDelay": true
     },
     "file": "Z790-Pro-RS_19.03.ROM",
     "platform": "Intel LGA1700",
@@ -301,7 +348,10 @@
       "formats": "BMP JPEG GIF",
       "inCompressedVolume": true,
       "logos": 1,
-      "signed": false
+      "signed": false,
+      "freeSpace": 4706280,
+      "anyVolumeLogo": true,
+      "gifMinDelay": true
     },
     "file": "B65BQ730.BST",
     "platform": "AM5",
@@ -319,7 +369,10 @@
       "image": "JPEG 1440x360",
       "formats": "BMP JPEG GIF",
       "logos": 1,
-      "signed": true
+      "signed": true,
+      "freeSpace": 5049472,
+      "anyVolumeLogo": true,
+      "gifMinDelay": true
     },
     "file": "SAPPHIRE_NITRO_B850A_WIFI7_AM50N101R30.BIN",
     "platform": "AM5",
@@ -337,7 +390,10 @@
       "image": "JPEG 1920x1080",
       "formats": "BMP JPEG PNG GIF",
       "logos": 1,
-      "signed": true
+      "signed": true,
+      "freeSpace": 5408464,
+      "anyVolumeLogo": true,
+      "gifMinDelay": true
     },
     "file": "N7-Z89XT_3.13.ROM",
     "platform": "Intel LGA1851",
@@ -356,7 +412,9 @@
       "formats": "BMP JPEG PNG",
       "inCompressedVolume": true,
       "logos": 1,
-      "signed": true
+      "signed": true,
+      "freeSpace": 4108752,
+      "anyVolumeLogo": true
     },
     "file": "1E798111.bin",
     "platform": "Intel LGA1700",

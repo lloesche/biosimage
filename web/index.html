@@ -93,7 +93,9 @@
             </div>
             <div class="field" id="space-field" data-help="The size of the new logo file in the BIOS, stored the way the original is (e.g. LZMA-compressed), and the largest that fits.&#10;&#10;Patching is only possible when it fits." hidden>
               <span class="k">Space</span>
-              <span class="v"><span class="meter"><span id="space-bar"></span></span> <span id="space-size"></span></span>
+              <span class="v"><span class="meter"><span id="space-bar"></span></span> <span id="space-size"></span>
+                <label class="opt" id="free-label" hidden data-help="EXPERIMENTAL. Moves the logo into the free space of the BIOS's main volume (FV_MAIN), which has megabytes free, and removes the original logo file.&#10;&#10;AMI's setup module loads the logo from whichever firmware volume has it, and this BIOS publishes the main volume like the one the logo is in. This is verified in the firmware code, not on a running board.&#10;&#10;If it does not work, the board boots without a logo. Have a recovery path (e.g. USB BIOS FlashBack) all the same."><input type="checkbox" id="free-space"><span>Use free space (experimental)</span></label>
+              </span>
             </div>
             <p class="error" id="space-error" role="alert" hidden></p>
             <p class="hint" id="formats-hint"></p>
@@ -143,6 +145,8 @@
         <h2>Save &amp; Exit</h2>
         <p class="locked-note">— Choose a new logo first —</p>
         <ul class="warnings" id="img-warnings" hidden></ul>
+        <p class="error" id="bootguard-warning" hidden></p>
+        <label class="opt" id="bootguard-label" hidden data-help="Intel Boot Guard checks the BIOS when the board powers on and refuses to start a changed one. Whether a board enforces it cannot be read from the BIOS file.&#10;&#10;Only continue if you can restore the original BIOS without starting the board: Gigabyte Q-Flash Plus, MSI Flash BIOS Button, ASUS USB BIOS FlashBack, a dual BIOS or an SPI programmer."><input type="checkbox" id="bootguard-ok"><span>I can restore the original BIOS without booting; patch it anyway</span></label>
         <label class="opt" id="force-label" hidden data-help="The firmware may fail to show this image. If it does, the screen stays black during boot; the BIOS itself still works."><input type="checkbox" id="force"><span>Insert the image anyway</span></label>
         <button type="button" class="selbar" id="build" data-help="Builds the patched BIOS in your browser, storing the logo the same way as the original (e.g. LZMA-compressed), then reads it back from scratch to verify the firmware and the new logo.&#10;&#10;Shortcut: Ctrl+S (⌘S on a Mac) or F10."><span>Create Patched BIOS</span><span>[<span class="save-key">Ctrl+S</span> / F10]</span></button>
         <p class="error" id="build-error" role="alert" hidden></p>
@@ -153,6 +157,8 @@
             <dd><span class="meter"><span id="usage-bar"></span></span> <span id="usage-size"></span></dd>
             <dt>Placement</dt>
             <dd id="usage-text"></dd>
+            <dt id="bootguard-k" hidden>Boot Guard</dt>
+            <dd id="bootguard-v" class="alert" hidden></dd>
             <dt>Verification</dt>
             <dd class="ok">Passed – logo read back from the patched file</dd>
           </dl>

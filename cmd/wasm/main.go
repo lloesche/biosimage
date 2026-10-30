@@ -79,10 +79,12 @@ func imageInfo(info *uefi.ImageInfo) map[string]any {
 // shared by every call on it, so sections decompressed for one call (e.g. the logo search) serve
 // the others.
 type firmware struct {
-	root     *uefi.Node
-	logos    []*uefi.Logo      // nil if no logo was found
-	formats  []uefi.LogoFormat // the best known: CurrentFormats, then LogoFormats
-	explorer *explorer         // created by the first explore
+	root      *uefi.Node
+	logos     []*uefi.Logo      // nil if no logo was found
+	formats   []uefi.LogoFormat // the best known: CurrentFormats, then LogoFormats
+	free      *uefi.FreeSpace   // found by logoFormats; nil if there is none
+	bootGuard uefi.BootGuard    // what the image shows of Intel Boot Guard
+	explorer  *explorer         // created by the first explore
 }
 
 var (
@@ -105,13 +107,15 @@ func imageArg(v js.Value) (*firmware, map[string]any) {
 	return f, nil
 }
 
-// open(firmware) -> {id, size, volumes, flashNote, capsule?, logos?, formats?, error?}
+// open(firmware) -> {id, size, volumes, flashNote, bootGuard, capsule?, logos?, formats?, error?}
 //
 // The image stays open, also when no logo was found (it can still be explored), until close.
+// bootGuard describes what the image shows of Intel Boot Guard ("" if nothing).
 func open(args []js.Value) map[string]any {
 	fw := bytesFrom(args[0])
-	f := &firmware{root: uefi.Parse(fw)}
-	res := map[string]any{"id": register(f), "size": len(fw), "volumes": len(uefi.FindVolumes(fw)), "flashNote": f.root.Capsule.FlashNote()}
+	f := &firmware{root: uefi.Parse(fw), bootGuard: uefi.DetectBootGuard(fw)}
+	res := map[string]any{"id": register(f), "size": len(fw), "volumes": len(uefi.FindVolumes(fw)), "flashNote": f.root.Capsule.FlashNote(),
+		"bootGuard": f.bootGuard.Note()}
 	if c := f.root.Capsule; c != nil {
 		res["capsule"] = map[string]any{"kind": c.Kind, "headerSize": c.HeaderSize, "signed": c.Signed}
 	}
@@ -131,8 +135,10 @@ func closeImage(args []js.Value) map[string]any {
 	return map[string]any{}
 }
 
-// logoFormats(image) -> {formats: [{format, current, reason}]}, including the formats whose
-// decoder is found. It may decompress the whole image, so it is a call of its own.
+// logoFormats(image) -> {formats: [{format, current, reason}], freeSpace}, including the
+// formats whose decoder is found, and the capacity of the free space the logo can be moved to
+// (0 if none, uefi.Node.FreeSpace). It may decompress the whole image, so it is a call of its
+// own.
 func logoFormats(args []js.Value) map[string]any {
 	f, errRes := imageArg(args[0])
 	if f == nil {
@@ -142,7 +148,11 @@ func logoFormats(args []js.Value) map[string]any {
 		return map[string]any{"error": "no logo in this image"}
 	}
 	f.formats = f.root.LogoFormats(f.logos)
-	return map[string]any{"formats": formatsJS(f.formats)}
+	res := map[string]any{"formats": formatsJS(f.formats), "freeSpace": 0}
+	if free, err := f.root.FreeSpace(); err == nil {
+		f.free, res["freeSpace"] = free, free.Capacity
+	}
+	return res
 }
 
 func formatsJS(formats []uefi.LogoFormat) []any {
@@ -247,8 +257,9 @@ func decodeAnimation(args []js.Value) map[string]any {
 		"timing": map[string]any{"speed": timing(true), "all": timing(false)}}
 }
 
-// encodeAnimation([rgba], width, height, delays, full) -> {data} | {error}: an animated GIF,
-// with complete frames if full is set, else only the changed areas (uefi.EncodeGIF).
+// encodeAnimation([rgba], width, height, delays, full) -> {data, preview} | {error}: an
+// animated GIF, with complete frames if full is set, else only the changed areas
+// (uefi.EncodeGIF). data is timed for the firmware (uefi.FirmwareTiming), preview for browsers.
 func encodeAnimation(args []js.Value) map[string]any {
 	w, h := args[1].Int(), args[2].Int()
 	frames, delays := make([]image.Image, args[0].Length()), make([]int, args[3].Length())
@@ -262,17 +273,23 @@ func encodeAnimation(args []js.Value) map[string]any {
 	for i := range delays {
 		delays[i] = args[3].Index(i).Int()
 	}
-	b, err := uefi.EncodeGIF(frames, delays, args[4].Truthy())
+	preview, err := uefi.EncodeGIF(frames, delays, args[4].Truthy())
 	if err != nil {
 		return map[string]any{"error": err.Error()}
 	}
-	return map[string]any{"data": bytesTo(b)}
+	data, err := uefi.FirmwareTiming(preview)
+	if err != nil {
+		return map[string]any{"error": err.Error()}
+	}
+	return map[string]any{"data": bytesTo(data), "preview": bytesTo(preview)}
 }
 
-// fitLogo(firmware image, image bytes) -> {size, capacity, storage, fits, error?}
+// fitLogo(firmware image, image bytes, {freeSpace})
+// -> {size, capacity, storage, fits, bootGuard, error?}
 //
 // size is the logo file that replaceLogo would write (uefi.Logo.StoredSize), for the logo file
-// with the least room if there are several; error says why it does not fit.
+// with the least room if there are several; error says why it does not fit. bootGuard warns
+// that Intel Boot Guard may keep the board from starting the patched image ("" if not).
 func fitLogo(args []js.Value) map[string]any {
 	f, errRes := imageArg(args[0])
 	if f == nil {
@@ -281,7 +298,28 @@ func fitLogo(args []js.Value) map[string]any {
 	if f.logos == nil {
 		return map[string]any{"error": "no logo in this image"}
 	}
-	img := bytesFrom(args[1])
+	opt, err := optionsArg(f, args, 2)
+	if err != nil {
+		return map[string]any{"error": err.Error()}
+	}
+	var free *uefi.FreeSpace
+	if opt.UseFreeSpace {
+		free = f.free
+	}
+	res := fitResult(f, bytesFrom(args[1]), opt)
+	res["bootGuard"] = f.bootGuard.Warning(f.logos, free)
+	return res
+}
+
+func fitResult(f *firmware, img []byte, opt uefi.ReplaceOptions) map[string]any {
+	if opt.UseFreeSpace {
+		size, err := f.free.StoredSize(f.logos[0], img)
+		res := map[string]any{"size": size, "capacity": f.free.Capacity, "storage": uefi.StoredInFreeSpace.String(), "fits": err == nil}
+		if err != nil {
+			res["error"] = err.Error()
+		}
+		return res
+	}
 	type fit struct {
 		size, room int
 		storage    uefi.Storage
@@ -303,21 +341,27 @@ func fitLogo(args []js.Value) map[string]any {
 	return res
 }
 
-// replaceLogo(firmware image, image bytes, {noCompress}) -> {id, data, changes, logos} | {error}
+// replaceLogo(firmware image, image bytes, {noCompress, freeSpace, bootGuardOK})
+// -> {id, data, changes, logos, capacity, bootGuard} | {error}
 //
 // id is the patched image, opened from the tree that verified it; logos are read back from it.
+// bootGuard warns that Intel Boot Guard may keep the board from starting it ("" if not); such
+// an image is only returned with bootGuardOK, like the CLI's -force.
 func replaceLogo(args []js.Value) map[string]any {
 	f, errRes := imageArg(args[0])
 	if f == nil {
 		return errRes
 	}
-	var opt uefi.ReplaceOptions
-	if len(args) > 2 && args[2].Truthy() {
-		opt.NoCompress = args[2].Get("noCompress").Truthy()
+	opt, err := optionsArg(f, args, 2)
+	if err != nil {
+		return map[string]any{"error": err.Error()}
 	}
 	p, err := uefi.ReplaceLogo(f.root.Bytes(), bytesFrom(args[1]), uefi.LogoFileGUID, opt)
 	if err != nil {
 		return map[string]any{"error": err.Error()}
+	}
+	if p.BootGuardWarning != "" && !(len(args) > 2 && args[2].Truthy() && args[2].Get("bootGuardOK").Truthy()) {
+		return map[string]any{"error": p.BootGuardWarning + " Confirm that you can restore the original BIOS without booting to patch it anyway."}
 	}
 	list := make([]any, len(p.Changes))
 	for i, c := range p.Changes {
@@ -332,7 +376,25 @@ func replaceLogo(args []js.Value) map[string]any {
 		}
 	}
 	id := register(&firmware{root: p.Root, logos: p.Logos, formats: f.formats})
-	return map[string]any{"id": id, "data": bytesTo(p.Data), "changes": list, "logos": logosJS(p.Logos)}
+	capacity := f.logos[0].Capacity
+	if opt.UseFreeSpace {
+		capacity = f.free.Capacity
+	}
+	return map[string]any{"id": id, "data": bytesTo(p.Data), "changes": list, "logos": logosJS(p.Logos),
+		"capacity": capacity, "bootGuard": p.BootGuardWarning}
+}
+
+// optionsArg returns the ReplaceOptions in args[i], if given: {noCompress, freeSpace}.
+func optionsArg(f *firmware, args []js.Value, i int) (uefi.ReplaceOptions, error) {
+	var opt uefi.ReplaceOptions
+	if len(args) > i && args[i].Truthy() {
+		opt.NoCompress = args[i].Get("noCompress").Truthy()
+		opt.UseFreeSpace = args[i].Get("freeSpace").Truthy()
+	}
+	if opt.UseFreeSpace && f.free == nil {
+		return opt, uefi.ErrNoFreeSpace
+	}
+	return opt, nil
 }
 
 // explore(image) -> {root, logoPath}: the structure tree, as far as it is unpacked, and the node

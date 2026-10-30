@@ -89,10 +89,6 @@ func (info *ImageInfo) CheckSupported(formats []LogoFormat) {
 // decoders returns the image formats AMITSE has a decoder for; none if it is not found.
 func (n *Node) decoders() map[string]bool {
 	tse := n.tse()
-	if tse == nil {
-		n.expandAll()
-		tse = n.tse()
-	}
 	found := map[string]bool{}
 	if tse == nil {
 		return found
@@ -110,7 +106,16 @@ func (n *Node) decoders() map[string]bool {
 	return found
 }
 
+// tse returns AMITSE's file, unpacking compressed sections if needed, or nil.
 func (n *Node) tse() *Node {
+	if tse := n.findTSE(); tse != nil {
+		return tse
+	}
+	n.expandAll()
+	return n.findTSE()
+}
+
+func (n *Node) findTSE() *Node {
 	var tse *Node
 	n.Walk(func(c *Node) bool {
 		if c.Kind == KindFile && c.File.GUID == tseFileGUID {

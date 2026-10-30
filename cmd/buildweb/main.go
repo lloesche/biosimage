@@ -51,6 +51,12 @@ func main() {
 
 	if *serve {
 		log.Printf("serving %s on http://%s", *dir, *addr)
-		log.Fatal(http.ListenAndServe(*addr, http.FileServer(http.Dir(*dir))))
+		// no-cache makes the browser check every file on each load: the URLs stay the same
+		// across rebuilds (version "dev"), and a cached old module would not match the new page.
+		files := http.FileServer(http.Dir(*dir))
+		log.Fatal(http.ListenAndServe(*addr, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Cache-Control", "no-cache")
+			files.ServeHTTP(w, r)
+		})))
 	}
 }

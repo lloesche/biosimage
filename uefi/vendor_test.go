@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -37,6 +38,11 @@ type vendorFirmware struct {
 		Compressed  bool   `json:"inCompressedVolume"`
 		Unsupported string `json:"unsupported"`
 		Formats     string `json:"formats"`
+		FreeSpace   int    `json:"freeSpace"`
+		BootGuard   string `json:"bootGuard"`
+		// What AMITSE's code shows (TSECode).
+		AnyVolumeLogo bool `json:"anyVolumeLogo"`
+		GIFMinDelay   bool `json:"gifMinDelay"`
 	} `json:"expect"`
 }
 
@@ -146,6 +152,59 @@ func checkVendorFirmware(t *testing.T, e vendorFirmware, fw []byte) {
 			t.Logf("  recompressed: file %s at %#x, %d -> %d bytes, %s", r.File.GUID, r.NewOffset, r.File.Size, r.NewSize, r.Placement)
 		}
 	}
+	if c := root.TSECode(); c.AnyVolumeLogo != e.Expect.AnyVolumeLogo || c.GIFMinDelay != e.Expect.GIFMinDelay {
+		t.Errorf("AMITSE code %+v, want any-volume logo %v, GIF min delay %v", c, e.Expect.AnyVolumeLogo, e.Expect.GIFMinDelay)
+	}
+	b := DetectBootGuard(fw)
+	var bg []string
+	if b.Manifests {
+		bg = append(bg, "manifests")
+	}
+	if b.Hashed != nil {
+		bg = append(bg, "hash")
+	}
+	if got := strings.Join(bg, ", "); got != e.Expect.BootGuard {
+		t.Errorf("Boot Guard %q, want %q", got, e.Expect.BootGuard)
+	}
+	if w := b.Warning(logos, nil); w != p.BootGuardWarning {
+		t.Errorf("Boot Guard warning %q, predicted %q", p.BootGuardWarning, w)
+	}
+	checkFreeSpace(t, e, root, logos, b)
+}
+
+// checkFreeSpace moves the logo into the free space of the main volume, with an image too
+// large for its own volume.
+func checkFreeSpace(t *testing.T, e vendorFirmware, root *Node, logos []*Logo, b BootGuard) {
+	l := logos[0]
+	fs, err := root.FreeSpace()
+	capacity := 0
+	if err == nil {
+		capacity = fs.Capacity
+	} else if !errors.Is(err, ErrNoFreeSpace) {
+		t.Fatal(err)
+	}
+	if capacity != e.Expect.FreeSpace {
+		t.Errorf("free space %d, want %d", capacity, e.Expect.FreeSpace)
+	}
+	if fs == nil {
+		return
+	}
+	img := makeBMP(300, 250, true) // 225 KB of noise, more than most logo volumes hold
+	p, err := ReplaceLogo(root.Bytes(), img, LogoFileGUID, ReplaceOptions{UseFreeSpace: true})
+	if err != nil {
+		t.Fatalf("free space: %v", err)
+	}
+	c := p.Changes[0]
+	if size, err := fs.StoredSize(l, img); err != nil || size != c.NewSize {
+		t.Errorf("free space: StoredSize %d %v, ReplaceLogo wrote %d", size, err, c.NewSize)
+	}
+	if p.Logos[0].Volume.Offset != fs.Volume.Offset {
+		t.Errorf("free space: logo read back from the volume at %#x", p.Logos[0].Volume.Offset)
+	}
+	if w := b.Warning(logos, fs); w != p.BootGuardWarning {
+		t.Errorf("free space: Boot Guard warning %q, predicted %q", p.BootGuardWarning, w)
+	}
+	t.Logf("free space: %d of %d bytes at %#x in the volume at %#x", c.NewSize, capacity, c.NewOffset, c.VolumeOffset)
 }
 
 // fetchFirmware returns the firmware file of e, downloading and verifying the vendor's

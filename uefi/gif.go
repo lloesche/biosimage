@@ -144,6 +144,60 @@ func EncodeGIF(frames []image.Image, delays []int, full bool) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// FirmwareTiming returns a copy of the GIF b with every frame's delay moved to the frame
+// before it, and the last frame's to the first. AMITSE waits for a frame's delay before
+// drawing it, so that a frame stays for the next frame's delay; browsers show a frame for its
+// own. With the delays moved, the firmware shows each frame as long as a browser shows b.
+func FirmwareTiming(b []byte) ([]byte, error) {
+	b = bytes.Clone(b)
+	var delays []int // offsets of the delays in the graphic control extensions
+	if len(b) < 13 {
+		return nil, errors.New("truncated GIF")
+	}
+	p := 13
+	if b[10]&0x80 != 0 {
+		p += 3 << (b[10]&7 + 1)
+	}
+	skipBlocks := func() error {
+		for p < len(b) && b[p] != 0 {
+			p += 1 + int(b[p])
+		}
+		if p >= len(b) {
+			return errors.New("truncated GIF data")
+		}
+		p++
+		return nil
+	}
+	for p < len(b) && b[p] != 0x3B {
+		switch {
+		case b[p] == 0x21 && p+8 <= len(b):
+			if b[p+1] == 0xF9 {
+				delays = append(delays, p+4)
+			}
+			p += 2
+		case b[p] == 0x2C && p+10 <= len(b):
+			if b[p+9]&0x80 != 0 {
+				p += 3 << (b[p+9]&7 + 1)
+			}
+			p += 11 // descriptor and LZW minimum code size
+		default:
+			return nil, fmt.Errorf("unexpected GIF block at %d", p)
+		}
+		if err := skipBlocks(); err != nil {
+			return nil, err
+		}
+	}
+	if len(delays) < 2 {
+		return b, nil
+	}
+	last := [2]byte{b[delays[len(delays)-1]], b[delays[len(delays)-1]+1]}
+	for i := len(delays) - 1; i > 0; i-- {
+		copy(b[delays[i]:delays[i]+2], b[delays[i-1]:delays[i-1]+2])
+	}
+	copy(b[delays[0]:], last[:])
+	return b, nil
+}
+
 // toRGBA returns img as an RGBA image whose bounds start at 0,0.
 func toRGBA(img image.Image) *image.RGBA {
 	if m, ok := img.(*image.RGBA); ok && m.Rect.Min == (image.Point{}) && m.Stride == 4*m.Rect.Dx() {

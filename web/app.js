@@ -5,7 +5,7 @@
 
 import { $, MIME, el, fmtBytes, fmtNum, hex8, initHelp, objectURL, setError, setLocked, setupDrop, showHelp } from './ui.js';
 import { fileHeaderView } from './hex.js';
-import { blocked, initEditor, output, setDetectedFormats, setFirmware } from './editor.js';
+import { blocked, initEditor, output, setDetectedFormats, setFirmware, setFreeSpace, storeOptions } from './editor.js';
 import { initExplorer } from './explorer.js';
 import { initNav, updateTabs } from './nav.js';
 import { emit, events, state } from './state.js';
@@ -94,7 +94,9 @@ async function loadFirmware(file) {
   showHelp('BIOS file loaded.\n\nNext: drop the new logo image under “New Logo”.');
   // Detecting the image decoders may decompress the whole image; it runs in the background.
   const res = await call('logoFormats', [info.id]);
-  if (load === fwLoads && !res.error) setDetectedFormats(res.formats);
+  if (load !== fwLoads || res.error) return;
+  setDetectedFormats(res.formats);
+  setFreeSpace(res.freeSpace);
 }
 
 // container returns the innermost file holding the compressed volume a logo is in, if any.
@@ -110,6 +112,7 @@ function renderFirmware(file) {
     ['File', `${file.name} · ${fmtNum(file.size)} bytes`],
     ['Format', !cap ? 'Flash image' : cap.headerSize ? `${cap.kind} · ${hex8(cap.headerSize).replace(/^0x0+/, '0x')} header` : `Flash image · ${cap.kind}`],
     cap?.signed ? ['Signature', `SIGNED – ${info.flashNote}`, 'alert'] : ['Signature', info.flashNote],
+    ...(info.bootGuard ? [['Boot Guard', info.bootGuard, 'alert']] : []),
     ['Volumes', `${info.volumes} firmware volumes`],
     ['Logo File', logo.guid],
     ['Location', outer
@@ -173,7 +176,8 @@ async function build() {
   const at = inputs;
   try {
     // replaceLogo verifies the result, including a fresh parse that must read back the image.
-    const res = await call('replaceLogo', [state.fwId, await output()], 'Patching the BIOS');
+    const opts = { ...storeOptions(), bootGuardOK: $('bootguard-ok').checked };
+    const res = await call('replaceLogo', [state.fwId, await output(), opts], 'Patching the BIOS');
     if (res.error) throw new Error(res.error);
     if (at === inputs) showResult(res);
     else call('close', [res.id]);
@@ -187,11 +191,13 @@ async function build() {
 
 function showResult(res) {
   const c = res.changes[0];
-  const capacity = state.fwInfo.logos[0].capacity;
+  const capacity = res.capacity;
   $('usage-bar').style.width = `${Math.min(100, (c.newSize / capacity) * 100).toFixed(1)}%`;
   $('usage-size').textContent = `${fmtNum(c.newSize)} / ${fmtNum(capacity)} bytes`;
   $('usage-text').textContent = [`${hex8(c.newOffset)} · ${c.storage}, ${c.placement}`,
     ...(res.changes.length > 1 ? [`${res.changes.length} copies`] : []), ...c.recompressed].join(' · ');
+  $('bootguard-k').hidden = $('bootguard-v').hidden = !res.bootGuard;
+  $('bootguard-v').textContent = res.bootGuard;
 
   const back = res.logos[0];
   $('readback').src = objectURL('readback', back.image, MIME[back.imageInfo?.format] || 'image/bmp');

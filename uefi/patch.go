@@ -10,6 +10,9 @@ import (
 type ReplaceOptions struct {
 	// NoCompress stores the image uncompressed even if the original was compressed.
 	NoCompress bool
+	// UseFreeSpace moves the logo into the free space of the main volume (Node.FreeSpace):
+	// the logo files are turned into pad files and one new file is added there. Experimental.
+	UseFreeSpace bool
 }
 
 // Storage says how the new image was stored in the logo file.
@@ -22,6 +25,7 @@ const (
 	StoredUnwrapped                             // LZMA wrapper removed (ReplaceOptions.NoCompress)
 	StoredLZMAFallback                          // was uncompressed, but only fits compressed
 	StoredReplacingEncapsulation                // raw section in place of an undecodable one
+	StoredInFreeSpace                           // new file in the main volume (UseFreeSpace)
 )
 
 func (s Storage) String() string {
@@ -32,6 +36,7 @@ func (s Storage) String() string {
 		"stored uncompressed (LZMA wrapper removed)",
 		"stored LZMA-compressed (the original was uncompressed but the new image did not fit)",
 		"stored uncompressed (replaces the undecodable encapsulation)",
+		"stored uncompressed (original logo file removed)",
 	}[s]
 }
 
@@ -69,6 +74,9 @@ type Patch struct {
 	// parse, so that callers need not parse the patched image again.
 	Root  *Node
 	Logos []*Logo
+	// BootGuardWarning describes the risk that Intel Boot Guard keeps the board from starting
+	// Data (DetectBootGuard), or is empty if there is none.
+	BootGuardWarning string
 }
 
 // ReplaceLogo returns a copy of buf with every logo file (gEfiDefaultBmpLogoGuid unless guid is
@@ -85,19 +93,83 @@ func ReplaceLogo(buf, img []byte, guid GUID, opt ReplaceOptions) (*Patch, error)
 		return nil, err
 	}
 	patch := &Patch{Data: out}
-	for _, l := range logos {
-		p := &patcher{logo: l.Node, before: map[*Buffer][]byte{}}
-		c, err := p.replace(l, img, opt)
+	if opt.UseFreeSpace {
+		c, err := moveLogo(logos, img)
 		if err != nil {
 			return nil, err
 		}
-		patch.Changes = append(patch.Changes, c)
+		patch.Changes = []Change{c}
+	} else {
+		for _, l := range logos {
+			p := &patcher{logo: l.Node, before: map[*Buffer][]byte{}}
+			c, err := p.replace(l, img, opt)
+			if err != nil {
+				return nil, err
+			}
+			patch.Changes = append(patch.Changes, c)
+		}
 	}
 	patch.Root = Parse(out)
-	if patch.Logos, err = verifyLogos(patch.Root, guid, img, len(logos)); err != nil {
+	if patch.Logos, err = verifyLogos(patch.Root, guid, img, len(patch.Changes)); err != nil {
 		return nil, fmt.Errorf("verification failed: %w", err)
 	}
+	patch.BootGuardWarning = DetectBootGuard(buf).warningIf(func(r Range) bool {
+		return !bytes.Equal(buf[r.Offset:r.End()], out[r.Offset:r.End()])
+	})
 	return patch, nil
+}
+
+// moveLogo turns the logo files into pad files and adds one with img to the free space of
+// the main volume (ReplaceOptions.UseFreeSpace). AMITSE reads the logo from whichever volume
+// has it.
+func moveLogo(logos []*Logo, img []byte) (Change, error) {
+	fs, err := logos[0].Node.Path()[0].FreeSpace()
+	if err != nil {
+		return Change{}, err
+	}
+	l := logos[0]
+	c := Change{VolumeOffset: fs.Volume.Offset, OldOffset: l.File.Offset, OldSize: l.File.Size,
+		Storage: StoredInFreeSpace, Placement: PlacedFreeSpace}
+	for _, l := range logos {
+		p := &patcher{logo: l.Node, before: map[*Buffer][]byte{}}
+		if err := p.placeFile(l.Node, buildPadFile(l.File.Size, l.Volume.EraseByte())); err != nil {
+			return Change{}, fmt.Errorf("removing the logo file at %#x: %w", l.File.Offset, err)
+		}
+		c.Recompressed = append(c.Recompressed, p.change.Recompressed...)
+	}
+	nf, err := freeSpaceFile(l, img, fs.Volume.Volume.EraseByte())
+	if err != nil {
+		return Change{}, err
+	}
+	p := &patcher{before: map[*Buffer][]byte{}}
+	c.NewSize = len(nf)
+	c.NewOffset, err = p.addFile(fs.Volume, nf, l.File.GUID, l.File.Alignment())
+	return c, err
+}
+
+// freeSpaceFile builds the logo file added by moveLogo: like l, with img uncompressed.
+func freeSpaceFile(l *Logo, img []byte, erase byte) ([]byte, error) {
+	data := img
+	if l.File.Type != FileTypeRaw {
+		data = NewSection(SectionRaw, img)
+		if l.Name != "" {
+			data = JoinSections(data, NewUISection(l.Name))
+		}
+	}
+	return BuildFile(l.File.GUID, l.File.Type, l.File.Attributes, data, erase)
+}
+
+// StoredSize returns the size of the logo file that ReplaceLogo with UseFreeSpace would add
+// for img, and an error (wrapping errTooBig) if it does not fit.
+func (fs *FreeSpace) StoredSize(l *Logo, img []byte) (int, error) {
+	nf, err := freeSpaceFile(l, img, fs.Volume.Volume.EraseByte())
+	if err != nil {
+		return 0, err
+	}
+	if len(nf) > fs.Capacity {
+		return len(nf), fmt.Errorf("%w: new logo file needs %d bytes but only %d are free in the main volume", errTooBig, len(nf), fs.Capacity)
+	}
+	return len(nf), nil
 }
 
 // independent ensures that no two logo files share a volume: patching one may move files in
@@ -219,6 +291,29 @@ func (p *patcher) placeFile(n *Node, nf []byte) error {
 		return err
 	}
 	return p.changed(vol)
+}
+
+// addFile writes file nf into the free space after the last file of volume vol, at the data
+// alignment align, and returns its offset.
+func (p *patcher) addFile(vol *Node, nf []byte, guid GUID, align int) (int, error) {
+	buf, v := vol.Buf.Data, vol.Volume
+	_, used, err := v.Files(buf)
+	if err != nil {
+		return 0, err
+	}
+	pos := alignedFilePos(v, used, ffsHeaderSize, max(align, 8))
+	if end := pos + len(nf); end > v.End() || !isErased(buf[used:min(v.alignUp(end), v.End())], v.EraseByte()) {
+		return 0, fmt.Errorf("%w: new logo file needs %d bytes but only %d are free in the volume at %#x", errTooBig, len(nf), v.End()-pos, v.Offset)
+	}
+	p.snapshot(vol.Buf)
+	if pos > used {
+		copy(buf[used:], buildPadFile(pos-used, v.EraseByte()))
+	}
+	copy(buf[pos:], nf)
+	if err := p.verifyVolume(vol, guid); err != nil {
+		return 0, err
+	}
+	return pos, p.changed(vol)
 }
 
 // replaceSection replaces section n by b (one or more sections of any size) and rebuilds

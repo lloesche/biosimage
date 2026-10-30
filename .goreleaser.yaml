@@ -1,10 +1,5 @@
 version: 2
 
-before:
-  hooks:
-    # WebAssembly module for the web app, attached to the release and deployed to Pages.
-    - go run ./cmd/buildweb -dir build/web
-
 builds:
   - env:
       - CGO_ENABLED=0
@@ -22,12 +17,5 @@ archives:
       - README.md
       - LICENSE
 
-release:
-  extra_files:
-    - glob: build/web/biosimage.wasm
-    - glob: build/web/wasm_exec.js
-
 checksum:
   name_template: checksums.txt
-  extra_files:
-    - glob: build/web/biosimage.wasm

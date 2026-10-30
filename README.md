@@ -28,6 +28,9 @@ Signed:   YES (AMI Aptio capsule)
           Q-Flash, ASRock Instant Flash) rejects it because it no longer matches the
           signature.
 Volumes:  5 top-level firmware volume(s)
+Formats:  BMP (current logo), JPEG (decoder found), PNG (decoder found), GIF (decoder found)
+Free:     3739072 bytes in the main volume at 0x1001000 for a logo moved there
+          (experimental: replace -free-space)
 
 Logo 1:   file 7BB28B99-61BB-11D5-9A5D-0090273FC14D at 0x1b830a0 (4729 bytes) in volume at 0x1b81000 (256 KiB)
   Stored:   LZMA section → RAW (Logo.bmp)
@@ -55,12 +58,15 @@ go install github.com/lloesche/biosimage@latest
 ```
 biosimage info    FIRMWARE                       show where and how the logo is stored
 biosimage extract [-o FILE] FIRMWARE             save the current logo image
-biosimage replace [-o FILE] [-no-compress] [-force] FIRMWARE IMAGE
+biosimage replace [-o FILE] [-no-compress] [-free-space] [-force] FIRMWARE IMAGE
 ```
 
 - `replace` writes `FIRMWARE-logo.<ext>` unless `-o` is given; it never overwrites the input.
 - `-no-compress` stores the image uncompressed even if the original was LZMA-compressed.
-- `-force` inserts the image despite warnings (see below).
+- `-free-space` moves the logo into the free space of the main volume (experimental, see
+  [More space](#more-space-experimental)).
+- `-force` inserts the image despite warnings (see below), and writes the file despite an
+  [Intel Boot Guard](#intel-boot-guard) warning.
 - `-guid` targets a file other than the standard logo file.
 
 ## Preparing the image
@@ -80,13 +86,16 @@ store it, and tells you before you build if it does not fit. For the most predic
 - PNG: 8- or 16-bit, **no alpha channel**, not interlaced.
 - JPEG: **baseline** (not progressive), 1:1 pixel density.
 - GIF: animated GIFs are played by AMITSE (min. 100 ms per frame, no disposal methods,
-  endless loop), but a vendor's boot path may show only the first frame. The web app's GIF
+  endless loop), but a vendor's boot path may show only the first frame. It plays only while
+  the board starts up (POST), usually a few seconds. The web app's GIF
   output takes care of this: it places every frame on the canvas, uses one palette of up to
   256 colours and needs no disposal method, as every frame is opaque and drawn over the last.
   Faster animations either keep their speed (frames are dropped to play at most 10 per second)
   or keep all frames (and play more slowly). Frames are stored either as the area that changed
   since the last one (smaller) or complete (in case a board does not place partial frames
-  correctly). "File as-is" inserts a GIF unchanged.
+  correctly). AMITSE waits for a frame's delay before drawing that frame, so each frame stays
+  for the next frame's delay; the web app moves the delays one frame back, so that frames are
+  shown as long as in a browser. "File as-is" inserts a GIF unchanged.
 
 `biosimage replace` checks for these and refuses images it expects to fail unless you pass
 `-force`.
@@ -101,6 +110,44 @@ magick logo.png -background black -alpha remove -alpha off -resize 300x300 \
 Size limit: the logo lives in a small firmware volume (128–320 KiB on the tested boards) and the
 stored, compressed file must fit (`biosimage info` shows the capacity). Flat-colour logos compress to a few dozen KiB; photos may not
 fit.
+
+## More space (experimental)
+
+The logo's own space is small: 36 KiB to 388 KiB on the tested boards (see
+[Tested with](#tested-with)). The main volume (FV_MAIN) has megabytes free on all of them. The
+**Use free space** option of the web app (`replace -free-space`) adds the logo there as a new,
+uncompressed file and turns the original logo file into padding.
+
+This works because AMI's setup module, AMITSE, does not look for the logo in a particular
+place: it reads the logo file from whichever firmware volume has it. biosimage checks this in
+the machine code of each BIOS's AMITSE: it disassembles the code around the Firmware Volume 2
+protocol and looks for the loop that reads the logo's raw section from every volume. It also
+requires the firmware's ROM layout table to mark the main volume for the DXE phase, the same
+way as the volumes the logo comes from today. Only then does it offer the option. It has not
+been tried on a running board yet, so keep a recovery path. If it does not work, expect the
+board to boot without a logo.
+
+The same way, the vendor tests check that AMITSE plays GIF animations at no more than 10 frames
+per second (delays under 100 ms are raised to 100 ms). It finds this limit in 18 of the 20 tested
+BIOSes; for the NUC 14 Pro and the EVGA Z790 DARK, how they time frames is unknown.
+
+### Intel Boot Guard
+
+Intel Boot Guard verifies the boot block when the board powers on. AMI firmware can also keep a
+hash of the main volume in the boot block, which then checks the main volume against it. A board
+that enforces Boot Guard does not start a BIOS whose verified parts changed. Whether a board
+enforces it is fused into the chipset and cannot be read from the BIOS file, but the file shows
+whether the vendor set it up (a key manifest and a boot policy manifest) and what the hash
+covers. Among the tested boards:
+
+- Gigabyte Z790 AORUS ELITE AX: set up, and the main volume, which holds the logo, is
+  hash-verified. A patched BIOS will very likely not start.
+- ASUS NUC 14 Pro: set up; what it verifies is unknown. A patched BIOS may not start.
+
+`info` shows this, `replace` refuses to write such a file unless `-force` is given, and the web
+app asks for confirmation before it builds one. Only go ahead if you can restore the original
+BIOS without booting the board: Gigabyte Q-Flash Plus, MSI Flash BIOS Button, ASUS USB BIOS
+FlashBack, a dual BIOS or an SPI programmer.
 
 ## Flashing
 
@@ -151,8 +198,9 @@ been flashed and confirmed so far; the other vendors are verified on the file le
 
 Limitations: biosimage's LZMA encoder compresses 10–20 % worse than the vendors' tools, so a
 recompressed main volume grows (MSI PRO Z790-A: 5.5 MB → 6.2 MB, MSI MAG Z890: 5.2 MB → 6.2 MB);
-it must still fit into the free space of its volume. Not supported: Intel Boot Guard-protected regions and more than one
-logo file per volume.
+it must still fit into the free space of its volume. Not supported: more than one logo file per
+volume. Changes to a volume that Intel Boot Guard verifies are detected (see
+[Intel Boot Guard](#intel-boot-guard)), not avoided.
 
 ## Tested with
 
@@ -160,28 +208,28 @@ These images are tested by the [vendor firmware workflow](.github/workflows/firm
 whenever the parsing code or the list changes. It downloads them from the vendors' servers
 and checks them against pinned hashes (see [`testdata/firmware.json`](testdata/firmware.json)).
 
-| Vendor | Board | Platform | BIOS | Logo | Result |
-|---|---|---|---|---|---|
-| ASUS | TUF GAMING B850I WIFI NEO | AM5 | 1804 | logo volume | ✅ patched and flashed via USB BIOS FlashBack |
-| ASUS | TUF GAMING B550-PLUS | AM4 | 3645 | logo volume, 2 copies | ✅ patched |
-| ASUS | PRIME Z790-P | Intel LGA1700 | 1836 | logo volume | ✅ patched |
-| ASUS | PRIME Z890-P | Intel LGA1851 | 3212 | logo volume | ✅ patched |
-| ASUS | NUC 14 Pro (NUC14RV) | Intel Meteor Lake | 0044 | nested volume | ✅ patched |
-| MSI | MAG B650 TOMAHAWK WIFI | AM5 | 7D75v1R3 | nested volume | ✅ patched |
-| MSI | B450 TOMAHAWK MAX | AM4 | 7C02v3M5 | compressed main volume, 2 copies | ✅ patched |
-| MSI | PRO Z790-A WIFI | Intel LGA1700 | 7E07vAJ | compressed main volume | ✅ patched |
-| MSI | MAG Z890 TOMAHAWK WIFI | Intel LGA1851 | 7E32v1AD | compressed main volume | ✅ patched |
-| MSI | MPG Z490 GAMING EDGE WIFI | Intel LGA1200 | 7C79v1F1 | compressed main volume | ✅ patched |
-| Gigabyte | X870 AORUS ELITE WIFI7 | AM5 | F13g | nested volume | ✅ patched |
-| Gigabyte | B550 AORUS ELITE V2 | AM4 | F20c | nested volume, 2 copies | ✅ patched |
-| Gigabyte | Z790 AORUS ELITE AX | Intel LGA1700 | FP | nested volume | ✅ patched |
-| Gigabyte | Z490 AORUS ELITE | Intel LGA1200 | F25a | nested volume | ✅ patched |
-| ASRock | B650M Pro RS | AM5 | 4.60 | nested volume | ✅ patched |
-| ASRock | Z790 Pro RS | Intel LGA1700 | 19.03 | nested volume | ✅ patched |
-| Biostar | B650M-SILVER | AM5 | B65BQ730 | compressed main volume | ✅ patched |
-| Sapphire | NITRO+ B850A WIFI 7 | AM5 | AM50N101R30 | nested volume | ✅ patched |
-| NZXT | N7 Z890 | Intel LGA1851 | 3.13 | nested volume | ✅ patched |
-| EVGA | Z790 DARK K\|NGP\|N | Intel LGA1700 | 1.11 | compressed main volume, uncompressed logo | ✅ patched |
+| Vendor | Board | Platform | BIOS | Logo | Space | Free space | Result |
+|---|---|---|---|---|---|---|---|
+| ASUS | TUF GAMING B850I WIFI NEO | AM5 | 1804 | logo volume | 248 KiB | 3.6 MiB | ✅ patched and flashed via USB BIOS FlashBack |
+| ASUS | TUF GAMING B550-PLUS | AM4 | 3645 | logo volume, 2 copies | 148 KiB | 6.4 MiB | ✅ patched |
+| ASUS | PRIME Z790-P | Intel LGA1700 | 1836 | logo volume | 225 KiB | 2.8 MiB | ✅ patched |
+| ASUS | PRIME Z890-P | Intel LGA1851 | 3212 | logo volume | 348 KiB | 3.8 MiB | ✅ patched |
+| ASUS | NUC 14 Pro (NUC14RV) | Intel Meteor Lake | 0044 | nested volume | 256 KiB | – | ✅ patched |
+| MSI | MAG B650 TOMAHAWK WIFI | AM5 | 7D75v1R3 | nested volume | 320 KiB | 5.0 MiB | ✅ patched |
+| MSI | B450 TOMAHAWK MAX | AM4 | 7C02v3M5 | compressed main volume, 2 copies | 78 KiB | 2.9 MiB | ✅ patched |
+| MSI | PRO Z790-A WIFI | Intel LGA1700 | 7E07vAJ | compressed main volume | 61 KiB | 1.9 MiB | ✅ patched |
+| MSI | MAG Z890 TOMAHAWK WIFI | Intel LGA1851 | 7E32v1AD | compressed main volume | 36 KiB | 2.3 MiB | ✅ patched |
+| MSI | MPG Z490 GAMING EDGE WIFI | Intel LGA1200 | 7C79v1F1 | compressed main volume | 227 KiB | 3.9 MiB | ✅ patched |
+| Gigabyte | X870 AORUS ELITE WIFI7 | AM5 | F13g | nested volume | 128 KiB | 6.4 MiB | ✅ patched |
+| Gigabyte | B550 AORUS ELITE V2 | AM4 | F20c | nested volume, 2 copies | 128 KiB | 4.2 MiB | ✅ patched |
+| Gigabyte | Z790 AORUS ELITE AX | Intel LGA1700 | FP | nested volume | 128 KiB | 5.4 MiB | ✅ patched |
+| Gigabyte | Z490 AORUS ELITE | Intel LGA1200 | F25a | nested volume | 128 KiB | 2.0 MiB | ✅ patched |
+| ASRock | B650M Pro RS | AM5 | 4.60 | nested volume | 128 KiB | 3.5 MiB | ✅ patched |
+| ASRock | Z790 Pro RS | Intel LGA1700 | 19.03 | nested volume | 128 KiB | 246 KiB | ✅ patched |
+| Biostar | B650M-SILVER | AM5 | B65BQ730 | compressed main volume | 388 KiB | 4.5 MiB | ✅ patched |
+| Sapphire | NITRO+ B850A WIFI 7 | AM5 | AM50N101R30 | nested volume | 128 KiB | 4.8 MiB | ✅ patched |
+| NZXT | N7 Z890 | Intel LGA1851 | 3.13 | nested volume | 128 KiB | 5.2 MiB | ✅ patched |
+| EVGA | Z790 DARK K\|NGP\|N | Intel LGA1700 | 1.11 | compressed main volume, uncompressed logo | 50 KiB | 3.9 MiB | ✅ patched |
 
 "Patched" means the image is patched and fully verified on the file level; only the first board
 has been flashed so far.
@@ -216,15 +264,6 @@ block the page; it reports its progress to it. To run it locally:
 ```sh
 go run ./cmd/buildweb -serve    # builds web/biosimage.wasm and serves http://localhost:8080
 ```
-
-### Releases and deployment
-
-Pushing a `v*` tag runs GoReleaser, which publishes the CLI binaries plus `biosimage.wasm`
-and `wasm_exec.js` as release assets. The Pages workflow then deploys `web/` together with
-the WebAssembly module of the latest release (it also runs when `web/` changes on `main`).
-Enable it once under *Settings → Pages → Source: GitHub Actions*. A change to the JavaScript
-API of [`cmd/wasm`](cmd/wasm) needs a new release to go with it: until then the deployed page
-pairs the new `web/` with the previous release's module.
 
 ## License
 

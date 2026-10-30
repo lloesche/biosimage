@@ -10,11 +10,12 @@ import (
 type Placement int
 
 const (
-	PlacedLast    Placement = iota // last file, grown or shrunk in place
-	PlacedInPlace                  // same slot, exact fit
-	PlacedPadded                   // same slot, remainder filled with a pad file
-	PlacedMoved                    // moved after the last file, old slot turned into a pad file
-	PlacedShifted                  // grown in place, the following files moved towards the end
+	PlacedLast      Placement = iota // last file, grown or shrunk in place
+	PlacedInPlace                    // same slot, exact fit
+	PlacedPadded                     // same slot, remainder filled with a pad file
+	PlacedMoved                      // moved after the last file, old slot turned into a pad file
+	PlacedShifted                    // grown in place, the following files moved towards the end
+	PlacedFreeSpace                  // added after the last file of the main volume
 )
 
 func (p Placement) String() string {
@@ -24,6 +25,7 @@ func (p Placement) String() string {
 		"rewritten in place, remainder padded",
 		"moved to end of volume, old slot padded",
 		"rewritten in place, following files moved",
+		"added to the free space of the main volume",
 	}[p]
 }
 

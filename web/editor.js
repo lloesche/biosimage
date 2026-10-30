@@ -17,8 +17,9 @@ const DEFAULT_SIZE = [672, 378];
 
 const ed = {
   version: 0, // counts changes to the output
-  output: null, // { version, bytes: Promise<Uint8Array> }
+  output: null, // { version, encoded: Promise<{ data, preview }> }
   fit: null, // fitLogo result for the output, once known
+  bootGuard: '', // the Intel Boot Guard warning for patching the output, if any
   warnings: [],
   loads: 0, // to drop an image that has been replaced by another one while loading
   timer: 0,
@@ -37,16 +38,24 @@ const animated = () => mode() === 'GIF' && !!state.source?.anim;
 // shownFrames returns the frames of the animation to store, [{index, delay}], for the timing.
 const shownFrames = () => state.source.anim.timing[document.querySelector('input[name=timing]:checked').value];
 
-// output returns the logo to patch in for the current settings, encoding it on first use.
-export function output() {
-  if (ed.output?.version !== ed.version) ed.output = { version: ed.version, bytes: encode() };
-  return ed.output.bytes;
+// encoded returns the logo to patch in for the current settings, encoding it on first use:
+// data, and preview for the browser (the same except for an animation's frame timing, see
+// uefi.FirmwareTiming).
+function encoded() {
+  if (ed.output?.version !== ed.version) ed.output = { version: ed.version, encoded: encode() };
+  return ed.output.encoded;
 }
+
+// output returns the logo to patch in.
+export const output = async () => (await encoded()).data;
+
+// storeOptions returns how replaceLogo is to store the logo.
+export const storeOptions = () => ({ freeSpace: !$('free-label').hidden && $('free-space').checked });
 
 async function encode() {
   const m = mode();
   const src = state.source;
-  if (m === 'asis') return src.bytes;
+  if (m === 'asis') return { data: src.bytes, preview: src.bytes };
   const { width: w, height: h } = $('canvas');
   let res;
   if (animated()) {
@@ -63,12 +72,14 @@ async function encode() {
     res = await call('encodeImage', [px, w, h, m, Number($('quality').value)]);
   }
   if (res.error) throw new Error(res.error);
-  return res.data;
+  return { data: res.data, preview: res.preview || res.data };
 }
 
-// blocked reports whether the output does not fit or has image warnings not overridden.
+// blocked reports whether the output does not fit, or has image or Boot Guard warnings that
+// have not been confirmed.
 export function blocked() {
-  return (ed.fit && !ed.fit.fits) || (ed.warnings.length > 0 && !$('force').checked);
+  return (ed.fit && !ed.fit.fits) || (ed.warnings.length > 0 && !$('force').checked) ||
+    (!!ed.bootGuard && !$('bootguard-ok').checked);
 }
 
 // ---------- firmware and formats ----------
@@ -76,6 +87,8 @@ export function blocked() {
 // setFirmware adapts the editor to a newly loaded BIOS: the canvas size of its logo and the
 // formats known without looking for decoders (state.fwInfo.formats).
 export function setFirmware() {
+  $('bootguard-ok').checked = false;
+  setFreeSpace(0);
   resetSize();
   showFormats(state.fwInfo.formats, false);
   inspectSource();
@@ -88,6 +101,21 @@ export function setDetectedFormats(formats) {
   showFormats(formats, true);
   if (state.source && mode() !== before) render();
   inspectSource();
+}
+
+// setFreeSpace offers to move the logo into free space of this many bytes (none if 0), found
+// with the decoders.
+export function setFreeSpace(capacity) {
+  $('free-label').hidden = !capacity;
+  if (!capacity) $('free-space').checked = false;
+  if (state.source) refit();
+}
+
+// refit checks the output against the space again, after the place to store it changed.
+function refit() {
+  ed.fit = null;
+  emit('logo');
+  showOutput();
 }
 
 // showFormats offers formats as output. Once they are detected, the chosen one is kept if it is
@@ -208,7 +236,7 @@ function updateHint() {
   const m = mode();
   if (si?.frames > 1 && m !== 'asis') {
     text += animError ? ` Its animation could not be read (${animError}); only the first frame is used.`
-      : m === 'GIF' ? ` Animated: ${animationSummary()}. Some boards show only the first frame.`
+      : m === 'GIF' ? ` Animated: ${animationSummary()}. It plays while the board starts up (POST), usually a few seconds; some boards show only the first frame.`
       : ` ${m} keeps only the first frame${offered('GIF') ? '; choose GIF to keep the animation' : ''}.`;
   }
   $('mode-hint').textContent = text;
@@ -288,10 +316,10 @@ function showOutput() {
   ed.timer = setTimeout(async () => {
     const version = ed.version;
     const m = mode();
-    let bytes, fit;
+    let bytes, preview, fit;
     try {
-      bytes = await output();
-      fit = await call('fitLogo', [state.fwId, bytes]);
+      ({ data: bytes, preview } = await encoded());
+      fit = await call('fitLogo', [state.fwId, bytes, storeOptions()]);
     } catch (err) {
       if (version === ed.version) $('preview-caption').textContent = `${caption} · ${err.message}`;
       return;
@@ -300,7 +328,7 @@ function showOutput() {
     $('preview-caption').textContent = `${caption} · ${m === 'asis' ? 'file' : m} ${fmtNum(bytes.length)} bytes`;
     const enc = $('encoded');
     enc.onload = () => (enc.hidden = version !== ed.version);
-    enc.src = objectURL('encoded', bytes, MIME[outputFormat()]);
+    enc.src = objectURL('encoded', preview, MIME[outputFormat()]);
     enc.style.width = canvas.style.width;
     showFit(fit);
   }, 150);
@@ -323,6 +351,9 @@ function showFit(fit) {
   setError($('space-error'), !ed.fit || fit.fits ? ''
     : fit.size > fit.capacity ? `The new logo does not fit: its file needs ${fmtNum(fit.size)} bytes and the BIOS has room for ${fmtNum(fit.capacity)}. ${tip}`
     : fit.error);
+  ed.bootGuard = fit.bootGuard || '';
+  setError($('bootguard-warning'), ed.bootGuard);
+  $('bootguard-label').hidden = !ed.bootGuard;
   emit('warnings');
 }
 
@@ -358,5 +389,7 @@ export function initEditor() {
     render();
   });
   $('force').addEventListener('change', () => emit('warnings'));
+  $('free-space').addEventListener('change', refit);
+  $('bootguard-ok').addEventListener('change', () => emit('warnings'));
   updateControls();
 }

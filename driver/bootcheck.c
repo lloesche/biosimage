@@ -62,6 +62,25 @@ static void check_pixels(EFI_BOOT_SERVICES *bs) {
   if (observed!=3) { log("FAIL animation pixels/loop\n");finish(1); }
   log("bootcheck: animation-pixels-loop\n");
 }
+// check_hold: played once, the animation must keep its last (yellow) frame on screen.
+static void check_hold(EFI_BOOT_SERVICES *bs) {
+  EFI_GUID guid={0x9042a9de,0x23dc,0x4a38,{0x96,0xfb,0x7a,0xde,0xd0,0x80,0x51,0x6a}};
+  EFI_GRAPHICS_OUTPUT_PROTOCOL *gop=NULL;
+  if (EFI_ERROR(bs->LocateProtocol(&guid,NULL,(void **)&gop))) finish(1);
+  UINTN sw=gop->Mode->Info->HorizontalResolution,sh=gop->Mode->Info->VerticalResolution;
+  UINTN x=(sw-160)/2,y=(sh-80)/2;
+  if (160*5<=sw*2 && 80*5<=sh*2) y=sh*382/1000-40;
+  BOOLEAN yellow=FALSE;
+  for (UINTN i=0;i<100;i++) {
+    bs->Stall(10000);
+    EFI_GRAPHICS_OUTPUT_BLT_PIXEL p;
+    if (EFI_ERROR(gop->Blt(gop,&p,EfiBltVideoToBltBuffer,x+8,y+16,0,0,1,1,0))) finish(1);
+    if (p.Blue==0x20 && p.Green==0xc0 && p.Red==0xff) yellow=TRUE;
+    else if (yellow) { log("FAIL animation looped after its last play\n");finish(1); }
+  }
+  if (!yellow) { log("FAIL last frame not shown\n");finish(1); }
+  log("bootcheck: animation-hold\n");
+}
 static EFI_HANDLE load(EFI_BOOT_SERVICES *bs, EFI_HANDLE app) {
   EFI_HANDLE driver = NULL;
   if (EFI_ERROR(bs->LoadImage(FALSE, app, NULL, driver_bytes, sizeof(driver_bytes), &driver))) { log("FAIL load\n"); finish(1); }
@@ -89,14 +108,16 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE app, EFI_SYSTEM_TABLE *st) {
   }
   // Also exercise the exact parser in the application, so it cannot be optimised away.
   make_sample();
+  if (TEST_CASE==11) put16(sample+10,1); // play once
   ANIMATION checked;
   if (!parse_animation(sample,sizeof(sample),&checked,NULL)) finish(1);
   if (TEST_CASE==6) sample[0]='X';
   if (TEST_CASE!=7 && EFI_ERROR(bs->InstallProtocolInterface(&mock_volume,&fv_guid,0,&mock_fv))) finish(1);
   log("bootcheck: start\n");
-  if (TEST_CASE == 0 || TEST_CASE==5 || TEST_CASE==10) {
+  if (TEST_CASE == 0 || TEST_CASE==5 || TEST_CASE==10 || TEST_CASE==11) {
     EFI_HANDLE driver = load(bs, app);
     if (TEST_CASE==5 || TEST_CASE==10) check_pixels(bs);
+    if (TEST_CASE==11) check_hold(bs);
     if (TEST_CASE==10 && injected_failure!=2) { log("FAIL no GOP retry\n");finish(1); }
     bs->Stall(10000000); // allow TCG timer delivery margin on a busy host
     if (EFI_ERROR(bs->UnloadImage(driver))) { log("FAIL unload\n"); finish(1); }

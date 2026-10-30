@@ -40,7 +40,7 @@ function selection() {
   return selectOutput(ed.choices, mode(), state.source?.info?.format, {
     compress: !$('compress-label').hidden && $('compress').checked,
     freeSpace: !$('free-label').hidden && $('free-space').checked,
-  });
+  }, { once: $('play-once').checked, logoFrame: Number($('logo-frame').value) });
 }
 
 // shownFrames returns the frames of the animation to store, [{index, delay}], for the timing.
@@ -57,7 +57,9 @@ function encoded(selected) {
 // Capture the selection once: preview, fit and Build share these exact bytes/options.
 export async function prepareOutput(selected = selection()) {
   const result = await encoded(selected);
-  return { data: result[selected.encodedKey], preview: result.preview, options: selected.options };
+  // The slider counts the frames shown; encoding merges identical ones.
+  const options = selected.kind === 'dxe' ? { ...selected.options, logoFrame: result.stored[selected.options.logoFrame] } : selected.options;
+  return { data: result[selected.encodedKey], preview: result.preview, options };
 }
 
 async function encode(selected) {
@@ -73,14 +75,14 @@ async function encode(selected) {
       return ctx.getImageData(0, 0, w, h).data;
     });
     const full = selected.frameStorage && document.querySelector('input[name=store]:checked').value === 'full';
-    res = await call('encodeAnimation', [frames, w, h, shown.map((f) => f.delay), full], 'Encoding the animation',
+    res = await call('encodeAnimation', [frames, w, h, shown.map((f) => f.delay), full, selected.plays], 'Encoding the animation',
       frames.map((f) => f.buffer));
   } else {
     const px = $('canvas').getContext('2d').getImageData(0, 0, w, h).data;
     res = await call('encodeImage', [px, w, h, selected.format, Number($('quality').value)]);
   }
   if (res.error) throw new Error(res.error);
-  return { data: res.data, preview: res.preview || res.data };
+  return { data: res.data, preview: res.preview || res.data, stored: res.stored };
 }
 
 // blocked reports whether the output does not fit, or has image or Boot Guard warnings that
@@ -217,6 +219,8 @@ async function loadAnimation(src, name) {
   const frames = await Promise.all(res.frames.map((px) =>
     createImageBitmap(new ImageData(new Uint8ClampedArray(px.buffer, px.byteOffset, px.length), res.width, res.height))));
   src.anim = { frames, delays: res.delays, timing: res.timing };
+  $('play-once').checked = res.plays !== 0; // like the GIF
+  $('logo-frame').value = 0;
 }
 
 // resetSize sets the canvas to the size of the current logo, with the logo at the default size
@@ -261,6 +265,7 @@ function updateControls() {
   $('quality-out').textContent = $('quality').value;
   $('quality-field').hidden = selected.asIs || selected.format !== 'JPEG';
   $('timing-field').hidden = !selected.animated;
+  $('repeat-field').hidden = $('logo-frame-field').hidden = selected.kind !== 'dxe';
   $('frames-field').hidden = !selected.frameStorage;
   for (const id of ['ox', 'oy']) {
     const v = Number($(id).value);
@@ -313,6 +318,27 @@ function place(ctx, image) {
   ctx.drawImage(image, x, y, dw, dh);
 }
 
+// showLogoFrame keeps the slider within the frames of the animation and shows the frame it
+// selects, which the BIOS stores as its regular logo.
+function showLogoFrame() {
+  if (selection().kind !== 'dxe') return;
+  const shown = shownFrames();
+  const slider = $('logo-frame');
+  slider.max = shown.length - 1;
+  const i = Number(slider.value);
+  slider.style.setProperty('--p', `${(i / Math.max(1, shown.length - 1)) * 100}%`);
+  $('logo-frame-out').textContent = `Frame ${i + 1} of ${shown.length}`;
+  const view = Object.assign($('logo-frame-view'), { width: $('canvas').width, height: $('canvas').height });
+  place(view.getContext('2d'), state.source.anim.frames[shown[i].index]);
+}
+
+// setLogoFrame selects a frame for the logo.
+function setLogoFrame(i) {
+  $('logo-frame').value = i;
+  showLogoFrame();
+  refit();
+}
+
 // render draws the canvas, the logo (the first frame of an animation) before encoding.
 function render() {
   updateControls();
@@ -335,6 +361,7 @@ function render() {
   }
   canvas.style.width = `${(canvas.width / PREVIEW_SCREEN_WIDTH) * 100}%`;
   $('encoded').hidden = true; // until the new canvas is encoded
+  showLogoFrame();
   updateWarnings();
   changed();
 }
@@ -425,6 +452,11 @@ export function initEditor() {
     changed();
   });
   $('editor').addEventListener('change', (e) => ['mode', 'timing', 'store'].includes(e.target.name) && render());
+  $('play-once').addEventListener('change', render);
+  $('logo-frame').addEventListener('input', showLogoFrame);
+  $('logo-frame').addEventListener('change', refit); // the animation stays, only the patch changes
+  $('logo-frame-first').addEventListener('click', () => setLogoFrame(0));
+  $('logo-frame-last').addEventListener('click', () => setLogoFrame($('logo-frame').max));
   $('size-source').addEventListener('click', () => {
     sourceSize();
     render();

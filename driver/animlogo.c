@@ -23,8 +23,8 @@ static UINT8 *data;
 static ANIMATION animation;
 static FRAME *frames;
 static EFI_GRAPHICS_OUTPUT_BLT_PIXEL *canvas;
-static UINTN current, remaining;
-static BOOLEAN displayed;
+static UINTN current, remaining, plays;
+static BOOLEAN displayed, held;
 static BOOLEAN dirty=TRUE;
 static EFI_GRAPHICS_OUTPUT_PROTOCOL *last_gop;
 static UINTN last_mode, last_width, last_height;
@@ -111,8 +111,14 @@ static void EFIAPI tick(EFI_EVENT e, void *ctx) {
   // A complete composited canvas is blitted each tick, so mode changes never expose
   // uninitialised portions of a changed-rectangle frame. Paused GOP means paused timing.
   BOOLEAN mode_changed=gop!=last_gop || gop->Mode->Mode!=last_mode || sw!=last_width || sh!=last_height;
-  if (displayed && !dirty && remaining>0 && !mode_changed) { remaining--; return; }
-  if (displayed && remaining==0) {
+  if (displayed && !dirty && (remaining>0 || held) && !mode_changed) { if (remaining) remaining--; return; }
+  if (displayed && remaining==0 && !held) {
+    // After the last frame of the last play, keep it on screen (redrawn on mode changes).
+    if (current+1==animation.Count && animation.Plays && ++plays>=animation.Plays) {
+      held=TRUE;
+      trace("animlogo: hold\n");
+      return;
+    }
     current=(current+1)%animation.Count;
     apply_frame(current); remaining=frames[current].Delay; dirty=TRUE;
   }

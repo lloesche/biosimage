@@ -5,7 +5,9 @@ package main
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
+	"image"
 
 	"github.com/lloesche/biosimage/uefi"
 )
@@ -22,6 +24,10 @@ type explorer struct {
 	ids    map[view]int
 	onPath map[*uefi.Node]bool // logo files and everything that contains one
 	logo   *uefi.Node          // the first logo file, if any
+	// driver and frames are the animation files Node.ReplaceAnimatedLogo adds, if the image has
+	// them; preview is the animation as a GIF, once animationPreview made it.
+	driver, frames *uefi.Node
+	preview        map[string]any
 }
 
 // view is a node as shown in the explorer. The decompressed contents of a compressed
@@ -42,25 +48,33 @@ func newExplorer(root *uefi.Node, logos []*uefi.Logo) *explorer {
 	return e
 }
 
-// mark records the logo files below n and their ancestors.
+// mark records the logo files below n and their ancestors, and the animation files.
 func (e *explorer) mark(n *uefi.Node) {
 	n.Walk(func(c *uefi.Node) bool {
-		if c.Kind == uefi.KindFile && c.File.GUID == uefi.LogoFileGUID {
+		if c.Kind != uefi.KindFile {
+			return true
+		}
+		switch c.File.GUID {
+		case uefi.LogoFileGUID:
 			for _, p := range c.Path() {
 				e.onPath[p] = true
 			}
+		case uefi.AnimationDriverGUID:
+			e.driver = c
+		case uefi.AnimationDataGUID:
+			e.frames = c
 		}
 		return true
 	})
 }
 
-// logoPath returns the IDs from the root to the first logo file.
-func (e *explorer) logoPath() []int {
-	if e.logo == nil {
+// path returns the IDs from the root to n, which nodeJS has sent; none for nil.
+func (e *explorer) path(n *uefi.Node) []int {
+	if n == nil {
 		return nil
 	}
 	var ids []int
-	path := e.logo.Path()
+	path := n.Path()
 	for i, n := range path {
 		ids = append(ids, e.ids[view{n: n}])
 		if i+1 < len(path) && path[i+1].Buf != n.Buf {
@@ -157,6 +171,7 @@ func (e *explorer) nodeJS(v view, open bool) map[string]any {
 		info[i] = []any{kv[0], kv[1]}
 	}
 	logo := v.data == nil && v.n.Kind == uefi.KindFile && v.n.File.GUID == uefi.LogoFileGUID
+	animation := v.data == nil && (v.n == e.driver || v.n == e.frames)
 	offset, size := v.n.Offset, v.n.Size
 	if v.data != nil {
 		offset, size = 0, len(v.data.Data)
@@ -164,9 +179,42 @@ func (e *explorer) nodeJS(v view, open bool) map[string]any {
 	return map[string]any{
 		"id": e.id(v), "kind": d.kind, "name": d.name, "type": d.typ, "guid": d.guid,
 		"offset": offset, "size": size, "decompressed": v.data != nil || v.n.Decompressed(), "info": info,
-		"logo": logo, "hasLogo": e.onPath[v.n], "image": d.image, "imageOffset": d.imageOffset,
+		"logo": logo, "hasLogo": e.onPath[v.n], "animation": animation, "image": d.image, "imageOffset": d.imageOffset,
 		"lazy": lazy, "children": children,
 	}
+}
+
+// animationPreview returns the animation stored in the image's animation data file as a GIF,
+// with its frame count, size, the length of one loop in milliseconds and its play count (0 loops
+// forever). It is read back from the firmware, so it shows what the driver will play.
+func (e *explorer) animationPreview() (map[string]any, error) {
+	if e.preview != nil {
+		return e.preview, nil
+	}
+	if e.frames == nil {
+		return nil, errors.New("this image has no boot animation")
+	}
+	data, err := e.frames.BootAnimationData()
+	if err != nil {
+		return nil, err
+	}
+	a, err := uefi.DecodeBootAnimation(data)
+	if err != nil {
+		return nil, err
+	}
+	frames := make([]image.Image, len(a.Frames))
+	loop := 0
+	for i, f := range a.Frames {
+		frames[i] = f
+		loop += a.Delays[i] * 10
+	}
+	gif, _, err := uefi.EncodeGIF(frames, a.Delays, a.Plays, false)
+	if err != nil {
+		return nil, err
+	}
+	r := a.Frames[0].Bounds()
+	e.preview = map[string]any{"data": gif, "frames": len(a.Frames), "width": r.Dx(), "height": r.Dy(), "loop": loop, "plays": a.Plays}
+	return e.preview, nil
 }
 
 // description is how a node is presented.
@@ -280,6 +328,10 @@ func describeFile(n *uefi.Node) description {
 	switch {
 	case f.GUID == uefi.LogoFileGUID:
 		d.name = "Boot logo"
+	case f.GUID == uefi.AnimationDriverGUID:
+		d.name = "Boot animation driver"
+	case f.GUID == uefi.AnimationDataGUID:
+		d.name = "Boot animation frames"
 	case f.Type == uefi.FileTypePad:
 		d.kind, d.name = "pad", "Pad file"
 	default:

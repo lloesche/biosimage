@@ -44,11 +44,11 @@ func TestAnimatedASUSFirmware(t *testing.T) {
 	}
 	c := clone(a)
 	c.SetRGBA(8, 4, color.RGBA{255, 32, 16, 255})
-	gif, err := EncodeGIF([]image.Image{a, c}, []int{10, 20}, false)
+	gif, _, err := EncodeGIF([]image.Image{a, c}, []int{10, 20}, 0, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	p, err := Parse(fw).ReplaceAnimatedLogo(gif, LogoFileGUID)
+	p, err := Parse(fw).ReplaceAnimatedLogo(gif, LogoFileGUID, AnimationOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +136,7 @@ func TestAnimatedASUSFirmware(t *testing.T) {
 		}
 		return true
 	})
-	expected, first, err := EncodeBootAnimation(&Animation{Frames: []*image.RGBA{a, c}, Delays: []int{10, 20}})
+	expected, first, err := EncodeBootAnimation(&Animation{Frames: []*image.RGBA{a, c}, Delays: []int{10, 20}}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,8 +148,37 @@ func TestAnimatedASUSFirmware(t *testing.T) {
 			t.Fatal("fallback does not match first frame")
 		}
 	}
-	if _, err := p.Root.ReplaceAnimatedLogo(gif, LogoFileGUID); err == nil {
+	if _, err := p.Root.ReplaceAnimatedLogo(gif, LogoFileGUID, AnimationOptions{}); err == nil {
 		t.Fatal("duplicate injection accepted")
+	}
+	once, err := Parse(fw).ReplaceAnimatedLogo(gif, LogoFileGUID, AnimationOptions{Repeat: RepeatOnce, LogoFrame: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, last, err := EncodeBootAnimation(&Animation{Frames: []*image.RGBA{a, c}, Delays: []int{10, 20}}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(last, first) || !bytes.Equal(once.Logos[0].Image, last) {
+		t.Fatal("logo is not the chosen frame")
+	}
+	var plays = -1
+	once.Root.Walk(func(n *Node) bool {
+		if n.Kind == KindFile && n.File.GUID == AnimationDataGUID {
+			data, err := n.BootAnimationData()
+			if err != nil {
+				t.Fatal(err)
+			}
+			a, err := DecodeBootAnimation(data)
+			if err != nil {
+				t.Fatal(err)
+			}
+			plays = a.Plays
+		}
+		return true
+	})
+	if plays != 1 {
+		t.Fatalf("RepeatOnce stored %d plays", plays)
 	}
 	t.Logf("verified first-frame fallback, DXE and compressed data in ASUS FV_MAIN; no firmware written")
 }

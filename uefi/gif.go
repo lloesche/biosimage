@@ -18,11 +18,36 @@ const MinFrameDelay = 10
 // maxAnimationPixels bounds the frames DecodeAnimation returns, at 4 bytes per pixel.
 const maxAnimationPixels = 32 << 20
 
+// maxAnimationPlays is the largest play count of an animation.
+const maxAnimationPlays = 1<<16 - 1
+
 // Animation is a decoded GIF animation: complete frames, each shown for its delay in units of
-// 10 ms, as browsers play it (delays of 0 and 10 ms count as 100 ms).
+// 10 ms, as browsers play it (delays of 0 and 10 ms count as 100 ms). Plays is how often it
+// plays: 0 loops it forever.
 type Animation struct {
 	Frames []*image.RGBA
 	Delays []int
+	Plays  int
+}
+
+// gifPlays returns the Plays of a GIF with loop count n (image/gif: 0 loops forever, -1 plays
+// once, n restarts n times).
+func gifPlays(n int) int {
+	if n == 0 {
+		return 0
+	}
+	return min(max(n, 0)+1, maxAnimationPlays)
+}
+
+// gifLoopCount is the inverse of gifPlays.
+func gifLoopCount(plays int) int {
+	if plays == 0 {
+		return 0
+	}
+	if plays == 1 {
+		return -1
+	}
+	return plays - 1
 }
 
 // ShownFrame is a frame of an Animation and how long AMI firmware is to show it.
@@ -60,7 +85,7 @@ func DecodeAnimation(b []byte) (*Animation, error) {
 	if len(g.Image)*bounds.Dx()*bounds.Dy() > maxAnimationPixels {
 		return nil, fmt.Errorf("GIF has too many frames (%d) for its size", len(g.Image))
 	}
-	a := &Animation{}
+	a := &Animation{Plays: gifPlays(g.LoopCount)}
 	canvas := image.NewRGBA(bounds)
 	for i, frame := range g.Image {
 		disposal := byte(0)
@@ -91,26 +116,27 @@ func clone(m *image.RGBA) *image.RGBA {
 	return &image.RGBA{Pix: bytes.Clone(m.Pix), Stride: m.Stride, Rect: m.Rect}
 }
 
-// EncodeGIF encodes opaque frames of the same size as a GIF that loops forever, frame i shown
-// for delays[i] (in units of 10 ms). The frames share one palette: their exact colours if there
-// are at most 256, else a median cut. Unless full is set, each frame after the first stores only
-// the area that changed, as AMI firmware draws a frame over the last one. Unchanged frames are
-// merged.
-func EncodeGIF(frames []image.Image, delays []int, full bool) ([]byte, error) {
+// EncodeGIF encodes opaque frames of the same size as a GIF that plays plays times (0 loops
+// forever), frame i shown for delays[i] (in units of 10 ms). The frames share one palette: their
+// exact colours if there are at most 256, else a median cut. Unless full is set, each frame
+// after the first stores only the area that changed, as AMI firmware draws a frame over the
+// last one. Unchanged frames are merged; stored[i] is the frame of the GIF that shows frames[i].
+func EncodeGIF(frames []image.Image, delays []int, plays int, full bool) (b []byte, stored []int, err error) {
 	if len(frames) == 0 {
-		return nil, errors.New("no frames")
+		return nil, nil, errors.New("no frames")
 	}
 	r := frames[0].Bounds()
 	rgba := make([]*image.RGBA, len(frames))
 	for i, f := range frames {
 		if f.Bounds().Size() != r.Size() {
-			return nil, errors.New("frames differ in size")
+			return nil, nil, errors.New("frames differ in size")
 		}
 		rgba[i] = toRGBA(f)
 	}
+	stored = make([]int, len(frames))
 	pal := gifPalette(rgba)
 	index := paletteIndex(pal)
-	g := &gif.GIF{Config: image.Config{ColorModel: pal, Width: r.Dx(), Height: r.Dy()}}
+	g := &gif.GIF{Config: image.Config{ColorModel: pal, Width: r.Dx(), Height: r.Dy()}, LoopCount: gifLoopCount(plays)}
 	var last *image.Paletted
 	for i, f := range rgba {
 		p := image.NewPaletted(image.Rect(0, 0, r.Dx(), r.Dy()), pal)
@@ -126,6 +152,7 @@ func EncodeGIF(frames []image.Image, delays []int, full bool) ([]byte, error) {
 			ch := changedRect(last, p)
 			if ch.Empty() {
 				g.Delay[len(g.Delay)-1] += delay
+				stored[i] = len(g.Image) - 1
 				continue
 			}
 			if !full {
@@ -135,13 +162,14 @@ func EncodeGIF(frames []image.Image, delays []int, full bool) ([]byte, error) {
 		g.Image = append(g.Image, frame)
 		g.Delay = append(g.Delay, delay)
 		g.Disposal = append(g.Disposal, gif.DisposalNone)
+		stored[i] = len(g.Image) - 1
 		last = p
 	}
 	var buf bytes.Buffer
 	if err := gif.EncodeAll(&buf, g); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return buf.Bytes(), nil
+	return buf.Bytes(), stored, nil
 }
 
 // FirmwareTiming returns a copy of the GIF b with every frame's delay moved to the frame
@@ -258,53 +286,73 @@ func gifPalette(frames []*image.RGBA) color.Palette {
 		return pal
 	}
 	channel := func(k uint32, c int) int { return int(k>>(16-8*c)) & 0xFF }
-	// widest returns the channel with the largest range in box, and the range.
-	widest := func(box []entry) (int, int) {
-		best, width := 0, -1
+	// A box is a set of colours, with the squared error of showing them all in their average
+	// colour, weighted by their pixels, and the channel that contributes most to it.
+	type box struct {
+		entries []entry
+		err     float64
+		channel int
+	}
+	measure := func(entries []entry) box {
+		b := box{entries: entries}
+		worst := -1.0
 		for c := range 3 {
-			lo, hi := 255, 0
-			for _, e := range box {
-				v := channel(e.key, c)
-				lo, hi = min(lo, v), max(hi, v)
+			var n, sum, squares float64
+			for _, e := range entries {
+				v, w := float64(channel(e.key, c)), float64(e.n)
+				n += w
+				sum += v * w
+				squares += v * v * w
 			}
-			if hi-lo > width {
-				best, width = c, hi-lo
+			variance := squares - sum*sum/n
+			b.err += variance
+			if variance > worst {
+				b.channel, worst = c, variance
 			}
 		}
-		return best, width
+		return b
 	}
-	boxes := [][]entry{all}
+	// Split the box with the largest error until the palette is full. So the colours go where
+	// the error is: a gradient gets many, the black around a logo none.
+	boxes := []box{measure(all)}
 	for len(boxes) < 256 {
-		pick, c, width := -1, 0, 0
-		for i, box := range boxes {
-			if bc, bw := widest(box); bw > width {
-				pick, c, width = i, bc, bw
+		pick := -1
+		for i, b := range boxes {
+			if b.err > 0 && (pick < 0 || b.err > boxes[pick].err) {
+				pick = i
 			}
 		}
 		if pick < 0 {
 			break
 		}
-		box := boxes[pick]
-		slices.SortFunc(box, func(a, b entry) int { return channel(a.key, c) - channel(b.key, c) })
-		total, half := 0, 0
-		for _, e := range box {
-			total += e.n
+		b := boxes[pick]
+		c := b.channel
+		slices.SortFunc(b.entries, func(a, b entry) int { return channel(a.key, c) - channel(b.key, c) })
+		// Cut where the two parts are best described by their averages.
+		var n, sum float64
+		for _, e := range b.entries {
+			n += float64(e.n)
+			sum += float64(channel(e.key, c)) * float64(e.n)
 		}
-		cut := 1
-		for i, e := range box[:len(box)-1] {
-			half += e.n
-			if 2*half >= total {
-				cut = i + 1
-				break
+		cut, best := 1, -1.0
+		var ln, lsum float64
+		for i, e := range b.entries[:len(b.entries)-1] {
+			ln += float64(e.n)
+			lsum += float64(channel(e.key, c)) * float64(e.n)
+			if channel(e.key, c) == channel(b.entries[i+1].key, c) {
+				continue
+			}
+			if score := lsum*lsum/ln + (sum-lsum)*(sum-lsum)/(n-ln); score > best {
+				cut, best = i+1, score
 			}
 		}
-		boxes[pick] = box[:cut]
-		boxes = append(boxes, box[cut:])
+		boxes[pick] = measure(b.entries[:cut])
+		boxes = append(boxes, measure(b.entries[cut:]))
 	}
 	pal := make(color.Palette, len(boxes))
 	for i, box := range boxes {
 		var r, g, b, n int
-		for _, e := range box {
+		for _, e := range box.entries {
 			r += channel(e.key, 0) * e.n
 			g += channel(e.key, 1) * e.n
 			b += channel(e.key, 2) * e.n

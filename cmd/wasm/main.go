@@ -30,6 +30,7 @@ func main() {
 	api.Set("explore", export(explore))
 	api.Set("expandNode", export(expandNode))
 	api.Set("nodeBytes", export(nodeBytes))
+	api.Set("animationPreview", export(animationPreview))
 	api.Set("close", export(closeImage))
 	js.Global().Set("biosimage", api)
 	// Long LZMA operations report progress to biosimageProgress(op, done, total), if defined.
@@ -93,19 +94,20 @@ type firmware struct {
 
 type animationPatch struct {
 	gif   []byte
+	opt   uefi.AnimationOptions
 	patch *uefi.Patch
 }
 
 // animatedLogo returns the animation patch of the image for gif (Node.ReplaceAnimatedLogo),
 // reusing the one fitLogo built.
-func (f *firmware) animatedLogo(gif []byte) (*uefi.Patch, error) {
-	if a := f.animation; a != nil && bytes.Equal(a.gif, gif) {
+func (f *firmware) animatedLogo(gif []byte, opt uefi.AnimationOptions) (*uefi.Patch, error) {
+	if a := f.animation; a != nil && a.opt == opt && bytes.Equal(a.gif, gif) {
 		return a.patch, nil
 	}
-	p, err := f.root.ReplaceAnimatedLogo(gif, uefi.LogoFileGUID)
+	p, err := f.root.ReplaceAnimatedLogo(gif, uefi.LogoFileGUID, opt)
 	f.animation = nil
 	if err == nil {
-		f.animation = &animationPatch{gif: bytes.Clone(gif), patch: p}
+		f.animation = &animationPatch{gif: bytes.Clone(gif), opt: opt, patch: p}
 	}
 	return p, err
 }
@@ -283,13 +285,14 @@ func decodeAnimation(args []js.Value) map[string]any {
 		return list
 	}
 	r := a.Frames[0].Rect
-	return map[string]any{"width": r.Dx(), "height": r.Dy(), "frames": frames, "delays": delays,
+	return map[string]any{"width": r.Dx(), "height": r.Dy(), "frames": frames, "delays": delays, "plays": a.Plays,
 		"timing": map[string]any{"speed": timing(true), "all": timing(false)}}
 }
 
-// encodeAnimation([rgba], width, height, delays, full) -> {data, preview} | {error}: an
-// animated GIF, with complete frames if full is set, else only the changed areas
-// (uefi.EncodeGIF). data is timed for the firmware (uefi.FirmwareTiming), preview for browsers.
+// encodeAnimation([rgba], width, height, delays, full, plays) -> {data, preview, stored} | {error}:
+// an animated GIF that plays plays times (0 loops forever), with complete frames if full is set,
+// else only the changed areas (uefi.EncodeGIF). data is timed for the firmware
+// (uefi.FirmwareTiming), preview for browsers. stored[i] is the GIF frame that shows frame i.
 func encodeAnimation(args []js.Value) map[string]any {
 	w, h := args[1].Int(), args[2].Int()
 	frames, delays := make([]image.Image, args[0].Length()), make([]int, args[3].Length())
@@ -303,7 +306,7 @@ func encodeAnimation(args []js.Value) map[string]any {
 	for i := range delays {
 		delays[i] = args[3].Index(i).Int()
 	}
-	preview, err := uefi.EncodeGIF(frames, delays, args[4].Truthy())
+	preview, stored, err := uefi.EncodeGIF(frames, delays, args[5].Int(), args[4].Truthy())
 	if err != nil {
 		return map[string]any{"error": err.Error()}
 	}
@@ -311,7 +314,7 @@ func encodeAnimation(args []js.Value) map[string]any {
 	if err != nil {
 		return map[string]any{"error": err.Error()}
 	}
-	return map[string]any{"data": bytesTo(data), "preview": bytesTo(preview)}
+	return map[string]any{"data": bytesTo(data), "preview": bytesTo(preview), "stored": idsJS(stored)}
 }
 
 // fitLogo(firmware image, image bytes, {freeSpace})
@@ -329,7 +332,7 @@ func fitLogo(args []js.Value) map[string]any {
 		return map[string]any{"error": "no logo in this image"}
 	}
 	if animationOption(args, 2) {
-		p, err := f.animatedLogo(bytesFrom(args[1]))
+		p, err := f.animatedLogo(bytesFrom(args[1]), animationOptions(args, 2))
 		res := map[string]any{"animationDXE": true, "fits": err == nil, "bootGuard": "", "storage": animationStorage}
 		if err != nil {
 			res["error"] = err.Error()
@@ -398,7 +401,7 @@ func replaceLogo(args []js.Value) map[string]any {
 	}
 	var p *uefi.Patch
 	if animationOption(args, 2) {
-		p, err = f.animatedLogo(bytesFrom(args[1]))
+		p, err = f.animatedLogo(bytesFrom(args[1]), animationOptions(args, 2))
 		f.animation = nil // the patched image is opened on its own
 	} else {
 		p, err = uefi.ReplaceLogo(f.root.Bytes(), bytesFrom(args[1]), uefi.LogoFileGUID, opt)
@@ -435,10 +438,20 @@ func replaceLogo(args []js.Value) map[string]any {
 }
 
 // animationStorage describes where ReplaceAnimatedLogo puts the animation.
-const animationStorage = "driver and frames LZMA-compressed in the free space of the main volume; first frame as the logo"
+const animationStorage = "driver and frames LZMA-compressed in the free space of the main volume; the chosen frame as the logo"
 
 func animationOption(args []js.Value, i int) bool {
 	return len(args) > i && args[i].Truthy() && args[i].Get("animateDXE").Truthy()
+}
+
+// animationOptions returns the AnimationOptions in args[i], {animateDXE, once, logoFrame}. The
+// web app always decides: once plays the animation once, else it loops.
+func animationOptions(args []js.Value, i int) uefi.AnimationOptions {
+	opt := uefi.AnimationOptions{Repeat: uefi.RepeatForever, LogoFrame: args[i].Get("logoFrame").Int()}
+	if args[i].Get("once").Truthy() {
+		opt.Repeat = uefi.RepeatOnce
+	}
+	return opt
 }
 
 // optionsArg returns the ReplaceOptions in args[i], if given: {compress, freeSpace}. compress
@@ -457,8 +470,9 @@ func optionsArg(f *firmware, args []js.Value, i int) (uefi.ReplaceOptions, error
 	return opt, nil
 }
 
-// explore(image) -> {root, logoPath}: the structure tree, as far as it is unpacked, and the node
-// IDs from the root to the logo file.
+// explore(image) -> {root, logoPath, animationPath}: the structure tree, as far as it is
+// unpacked, and the node IDs from the root to the logo file and to the animation driver (none
+// if there is none).
 func explore(args []js.Value) map[string]any {
 	f, errRes := imageArg(args[0])
 	if f == nil {
@@ -469,11 +483,35 @@ func explore(args []js.Value) map[string]any {
 	}
 	e := f.explorer
 	root := e.nodeJS(view{n: e.root}, true)
-	path := make([]any, 0)
-	for _, id := range e.logoPath() {
-		path = append(path, id)
+	return map[string]any{"root": root, "logoPath": idsJS(e.path(e.logo)), "animationPath": idsJS(e.path(e.driver))}
+}
+
+func idsJS(ids []int) []any {
+	out := make([]any, len(ids))
+	for i, id := range ids {
+		out[i] = id
 	}
-	return map[string]any{"root": root, "logoPath": path}
+	return out
+}
+
+// animationPreview(image) -> {data, frames, width, height, loop} | {error}: the boot animation
+// stored in the image, read back from it as a GIF (explorer.animationPreview); loop is the
+// length of one loop in milliseconds.
+func animationPreview(args []js.Value) map[string]any {
+	e, errRes := explorerArg(args[0])
+	if e == nil {
+		return errRes
+	}
+	p, err := e.animationPreview()
+	if err != nil {
+		return map[string]any{"error": err.Error()}
+	}
+	res := map[string]any{}
+	for k, v := range p {
+		res[k] = v
+	}
+	res["data"] = bytesTo(p["data"].([]byte))
+	return res
 }
 
 // explorerArg returns the explorer of an image that explore was called on.

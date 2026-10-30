@@ -6,6 +6,7 @@ import (
 	"image/color"
 	"image/draw"
 	"image/gif"
+	"math"
 	"slices"
 	"testing"
 )
@@ -28,7 +29,7 @@ func TestEncodeGIFStoresChangesOnly(t *testing.T) {
 	draw.Draw(b, image.Rect(5, 6, 9, 8), &image.Uniform{blue}, image.Point{}, draw.Src)
 	frames := []image.Image{a, clone(a), b}
 	for _, full := range []bool{false, true} {
-		data, err := EncodeGIF(frames, []int{10, 15, 30}, full)
+		data, _, err := EncodeGIF(frames, []int{10, 15, 30}, 0, full)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -148,5 +149,70 @@ func TestDecodeAnimationDisposal(t *testing.T) {
 		if got := last.RGBAAt(3, 3); got != c.at3x3 || last.RGBAAt(10, 10) != green || last.RGBAAt(0, 0) != red {
 			t.Fatalf("disposal %d: pixel at 3,3 is %v, want %v", c.disposal, got, c.at3x3)
 		}
+	}
+}
+
+// TestGIFStoredFrames checks that a merged frame maps to the GIF frame that shows it.
+func TestGIFStoredFrames(t *testing.T) {
+	frames := []image.Image{filled(8, 8, red), filled(8, 8, red), filled(8, 8, green), filled(8, 8, red)}
+	b, stored, err := EncodeGIF(frames, []int{10, 10, 10, 10}, 0, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(stored, []int{0, 0, 1, 2}) {
+		t.Fatalf("stored %v", stored)
+	}
+	a, err := DecodeAnimation(b)
+	if err != nil || len(a.Frames) != 3 {
+		t.Fatalf("%d frames: %v", len(a.Frames), err)
+	}
+}
+
+// TestGIFPlays checks that a GIF keeps its play count through encoding and decoding.
+func TestGIFPlays(t *testing.T) {
+	frames := []image.Image{filled(8, 8, red), filled(8, 8, green)}
+	for _, plays := range []int{0, 1, 2, 5} {
+		b, _, err := EncodeGIF(frames, []int{10, 10}, plays, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		a, err := DecodeAnimation(b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if a.Plays != plays {
+			t.Errorf("%d plays decoded as %d", plays, a.Plays)
+		}
+	}
+}
+
+// TestGIFPaletteFollowsPixels checks that a smooth area keeps its colours next to many rare
+// ones: a blue gradient in a black image, with a few pixels of every other hue.
+func TestGIFPaletteFollowsPixels(t *testing.T) {
+	img := image.NewRGBA(image.Rect(0, 0, 400, 400))
+	for i := 3; i < len(img.Pix); i += 4 {
+		img.Pix[i] = 255
+	}
+	for y := range 128 {
+		for x := range 128 {
+			img.SetRGBA(136+x, 136+y, color.RGBA{0, byte(x), byte(127 + y), 255})
+		}
+	}
+	for i := range 4096 { // rare, far apart colours along the edges
+		img.SetRGBA(i%400, i/400, color.RGBA{byte(i * 7), byte(i * 13), byte(i * 29), 255})
+	}
+	pal := gifPalette([]*image.RGBA{img})
+	index := paletteIndex(pal)
+	sum := 0.0
+	for y := range 128 {
+		for x := range 128 {
+			p := img.RGBAAt(136+x, 136+y)
+			c := pal[index(rgbKey([]byte{p.R, p.G, p.B}))].(color.RGBA)
+			dg, db := float64(p.G)-float64(c.G), float64(p.B)-float64(c.B)
+			sum += math.Sqrt(dg*dg + db*db)
+		}
+	}
+	if mean := sum / (128 * 128); mean > 6 {
+		t.Fatalf("the gradient is off by %.1f on average", mean)
 	}
 }

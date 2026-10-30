@@ -198,7 +198,8 @@ async function build() {
 function showResult(res) {
   const c = res.changes[0];
   const capacity = res.capacity;
-  // An animation is measured in the free space it takes; the first frame replaces the logo.
+  $('verify-text').textContent = `Passed – ${res.animationDXE ? 'logo and animation' : 'logo'} read back from the patched file`;
+  // An animation is measured in the free space it takes; one of its frames replaces the logo.
   const [used, room] = res.animationDXE ? [res.animationSize, res.animationRoom] : [c.newSize, capacity];
   $('usage-bar').style.width = `${Math.min(100, (used / room) * 100).toFixed(1)}%`;
   $('usage-size').textContent = `${fmtNum(used)} / ${fmtNum(room)} bytes${res.animationDXE ? ` · ${res.animationStorage}` : ''}`;

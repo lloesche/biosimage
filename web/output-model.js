@@ -13,7 +13,7 @@ export function outputChoices(formats, hasAnimation, dxeSupported) {
 
 // Resolve one snapshot before starting asynchronous encoding. Bytes and storage
 // options must always describe the same selection, even if controls change later.
-export function selectOutput(choices, value, sourceFormat, logoOptions) {
+export function selectOutput(choices, value, sourceFormat, logoOptions, { once = false, logoFrame = 0 } = {}) {
   const asIs = value === 'asis';
   const choice = asIs ? { value, format: sourceFormat, kind: 'static' }
     : choices.find((c) => c.value === value);
@@ -26,6 +26,7 @@ export function selectOutput(choices, value, sourceFormat, logoOptions) {
     logoStorage: !dxe,
     requiresFit: dxe,
     encodedKey: dxe ? 'preview' : 'data', // DXE uses each frame's own delay.
-    options: dxe ? { animateDXE: true } : { ...logoOptions },
+    plays: dxe && once ? 1 : 0, // how often the encoded animation plays; 0 loops
+    options: dxe ? { animateDXE: true, once, logoFrame } : { ...logoOptions },
   };
 }

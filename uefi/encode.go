@@ -33,7 +33,8 @@ func EncodeImage(img image.Image, format string, quality int) ([]byte, error) {
 		}
 		return buf.Bytes(), nil
 	case "GIF":
-		return EncodeGIF([]image.Image{img}, nil, true)
+		b, _, err := EncodeGIF([]image.Image{img}, nil, 0, true)
+		return b, err
 	}
 	return nil, fmt.Errorf("cannot encode %s", format)
 }

@@ -84,6 +84,17 @@
                 <label class="opt"><input type="radio" name="timing" value="all"><span>All frames</span></label>
               </span>
             </div>
+            <div class="field" id="repeat-field" data-help="Unticked, the animation loops until the board leaves the logo screen. Ticked, it plays once and its last frame stays on screen.&#10;&#10;It starts the way your GIF is set to play." hidden>
+              <span class="k">Repeat</span>
+              <span class="v"><label class="opt"><input type="checkbox" id="play-once"><span>Play once, then keep the last frame</span></label></span>
+            </div>
+            <div class="field" id="logo-frame-field" data-help="The frame stored as the BIOS's regular boot logo. The firmware draws it itself, so you see it if the animation driver does not run, and possibly before the animation starts. Later boot screens may show it too.&#10;&#10;The animation itself always starts at its first frame." hidden>
+              <span class="k">Stored logo</span>
+              <span class="v"><input type="range" id="logo-frame" min="0" max="0" value="0" aria-label="Frame stored as the logo"> <output id="logo-frame-out"></output>
+                <span><button type="button" class="key" id="logo-frame-first">[First]</button> <button type="button" class="key" id="logo-frame-last">[Last]</button></span>
+                <canvas id="logo-frame-view" aria-label="The frame stored as the logo"></canvas>
+              </span>
+            </div>
             <div class="field" id="frames-field" data-help="Changes: each frame after the first stores only the area that changed since the previous one, and is drawn over it. Much smaller.&#10;&#10;Complete: every frame is stored whole. Larger, but works even if a board's firmware does not place partial frames correctly; try it if the animation looks garbled." hidden>
               <span class="k">Frames</span>
               <span class="v">
@@ -98,7 +109,7 @@
                 <label class="opt" id="free-label" hidden data-help="EXPERIMENTAL. Moves the logo into the free space of the BIOS's main volume (FV_MAIN), which has megabytes free, and removes the original logo file.&#10;&#10;AMI's setup module loads the logo from whichever firmware volume has it, and this BIOS publishes the main volume like the one the logo is in. This is verified in the firmware code, not on a running board.&#10;&#10;If it does not work, the board boots without a logo. Have a recovery path (e.g. USB BIOS FlashBack) all the same."><input type="checkbox" id="free-space"><span>Use free space (experimental)</span></label>
               </span>
             </div>
-            <p class="hint" id="animation-warning" hidden>Experimental: adds a boot-time animation driver and first-frame fallback. Keep USB BIOS FlashBack or another recovery method available.</p>
+            <p class="hint" id="animation-warning" hidden>Experimental: adds a boot-time animation driver, with one of its frames as the regular logo. Keep USB BIOS FlashBack or another recovery method available.</p>
             <p class="error" id="space-error" role="alert" hidden></p>
             <p class="hint" id="formats-hint"></p>
             <p class="hint" id="mode-hint"></p>
@@ -162,7 +173,7 @@
             <dt id="bootguard-k" hidden>Boot Guard</dt>
             <dd id="bootguard-v" class="alert" hidden></dd>
             <dt>Verification</dt>
-            <dd class="ok">Passed – logo read back from the patched file</dd>
+            <dd class="ok" id="verify-text">Passed – logo read back from the patched file</dd>
           </dl>
           <figure class="shot" data-help="This image was decoded from the patched BIOS file you are about to download.">
             <div class="picture"><img id="readback" alt="Logo read back from the patched BIOS"></div>
@@ -184,6 +195,7 @@
             <label class="opt"><input type="radio" name="nc-src" value="patched" id="nc-src-patched" disabled><span>Patched</span></label>
           </span>
           <button type="button" class="key" id="nc-logo" data-help="Jumps to the boot logo file, opening compressed volumes on the way. Shortcut: L">[L] Go to logo</button>
+          <button type="button" class="key" id="nc-anim" hidden data-help="Jumps to the boot animation driver that biosimage added, next to its frames. Both show the animation, read back from the patched BIOS. Shortcut: A">[A] Go to animation</button>
         </div>
         <div class="nc" id="nc">
           <div class="nc-panel">

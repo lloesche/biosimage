@@ -3,7 +3,7 @@
 `animlogo.c` is a freestanding x64 UEFI boot-service driver. biosimage injects it only when
 its compatibility and firmware-protection checks allow the experimental animation feature.
 The animation data is a separate FFS file beside the driver; the normal logo remains a BMP
-of the animation's first frame as a fallback. The driver does not patch existing executable
+of one of the animation's frames (the first by default) as a fallback. The driver does not patch existing executable
 code or bypass image authentication. Hardware boot and recovery remain unverified.
 
 ## Build and test on Linux and macOS
@@ -69,13 +69,15 @@ At entry the driver uses LoadedImage.DeviceHandle's Firmware Volume 2 protocol t
 RAW section of data file `6EDB8A32-70A0-4B5D-B131-0277F602E529`. Data cannot silently come from
 another volume. Firmware does section decompression; ReadSection authentication failure,
 missing data, malformed data and allocation failures prevent the timer from starting.
-The complete BIA1 stream is validated before frame/canvas allocation and playback.
+The complete BIA2 stream is validated before frame/canvas allocation and playback.
 
 All allocations happen at entry. A composited full canvas is retained; changed rectangles
 update it, and frame zero is full so every loop restores the initial image. A 10 ms timer
 tracks GIF delays (at least 100 ms per frame), looking up the current GOP and its mode each
 tick. The driver advances only when a usable GOP exists. A changed mode triggers a full
 canvas redraw, avoiding stale partial frames. It never changes the screen mode itself.
+The animation loops, or with a play count stops on its last frame after that many plays and
+keeps it on screen, still redrawing it after a mode change.
 
 Placement matches the gated AMITSE rule: centred horizontally, with the image's middle at
 38.2% of screen height when both dimensions are at most 40% of the screen; otherwise centred.
@@ -87,16 +89,17 @@ greater than 3. An independent five-second relative deadline ends fallback playb
 the protocol is absent. ExitBootServices always sets the stopped flag; that callback makes
 no boot-service calls. Unload cancels and closes all events and frees all allocated buffers.
 
-## BIA1 data format
+## BIA2 data format
 
 All integers are little endian. No native C structs are serialized.
 
 | Offset | Field |
 |---|---|
-| 0 | Four bytes `BIA1` |
+| 0 | Four bytes `BIA2` |
 | 4 | Width, uint16 |
 | 6 | Height, uint16 |
-| 8 | Frame count, uint32 |
+| 8 | Frame count, uint16 |
+| 10 | Play count, uint16: 0 loops forever, n plays n times and holds the last frame |
 | 12 | 256 palette entries, four bytes each: blue, green, red, reserved |
 | 1036 | First frame; subsequent frames follow immediately |
 
@@ -113,13 +116,13 @@ and trailing data are rejected. `frames.h` is the runtime parser shared with C p
 
 The OVMF application embeds the actual driver PE and calls `LoadImage` / `StartImage`, rather
 than directly calling the driver's entry point. It does not bypass image authentication.
-The eleven scenarios cover:
+The twelve scenarios cover:
 
-- All scenarios load the same real BIA1 playback driver through a mock FV2 ReadSection
+- All scenarios load the same real BIA2 playback driver through a mock FV2 ReadSection
   on the loaded device, including missing-protocol deadline, states 0/3 continuing and
   4–7 stopping, ExitBootServices while active, late protocol discovery, and GOP mode changes.
 - Pixel readback sees the coloured changed rectangle and the restored first frame on looping; fallback timeout
-  and mode-change redraw are checked.
+  and mode-change redraw are checked. With a play count of one, it sees the last frame stay on screen.
 - Bad data, missing FV2/data and authentication TEST_FAILED are refused before playback.
 - A failed GOP blit is retried with the same frame, rather than silently skipping it.
 

@@ -58,7 +58,9 @@ go install github.com/lloesche/biosimage@latest
 ```
 biosimage info    FIRMWARE                       show where and how the logo is stored
 biosimage extract [-o FILE] FIRMWARE             save the current logo image
-biosimage replace [-o FILE] [-compress | -no-compress] [-free-space] [-force] [-animate-dxe] FIRMWARE IMAGE
+biosimage replace [-o FILE] [-compress | -no-compress] [-free-space] [-force]
+                  [-animate-dxe [-animate-once | -animate-loop] [-animate-logo-frame N]]
+                  FIRMWARE IMAGE
 ```
 
 - `replace` writes `FIRMWARE-logo.<ext>` unless `-o` is given; it never overwrites the input.
@@ -126,8 +128,9 @@ fit.
 
 Some boards, including the ASUS TUF GAMING B850I WIFI NEO, do not read GIF on their normal
 boot logo path. On compatible firmware, **Animate during POST** adds a small UEFI driver and
-animation data to the published main firmware volume. The normal logo is the first frame as
-a BMP, so it remains visible if the animation driver does not run. The following frames are
+animation data to the published main firmware volume. The normal logo becomes one frame of
+the animation as a BMP, the first by default, so it remains visible if the animation driver
+does not run. The following frames are
 drawn over that rectangle while the board starts up; playback stops on setup, boot menu,
 boot handoff, or ExitBootServices. If AMI's POST-state protocol is unavailable, playback is
 limited to a few seconds.
@@ -135,6 +138,13 @@ limited to a few seconds.
 ```sh
 biosimage replace -animate-dxe -o animated.CAP original.CAP animation.gif
 ```
+
+The animation plays as often as the GIF is set to: most GIFs loop until the board leaves the
+logo screen. One that plays a set number of times then keeps its last frame on screen.
+`-animate-once` and `-animate-loop` override the GIF, as does **Play once** in the web app.
+`-animate-logo-frame N` (counted from 0), or **Stored logo** in the web app, chooses the frame
+that becomes the normal logo. The animation itself always starts at its first frame, so a
+different frame can show briefly around the start, depending on when the driver begins.
 
 The CLI keeps every GIF frame, with delays of at least 100 ms, without resizing. The web app
 lets you place the animation on its canvas and choose timing before encoding it. The option

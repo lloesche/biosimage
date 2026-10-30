@@ -20,7 +20,9 @@ const usage = `biosimage - replace the boot logo in AMI Aptio / UEFI firmware im
 Usage:
   biosimage info    FIRMWARE
   biosimage extract [-o FILE] FIRMWARE
-  biosimage replace [-o FILE] [-compress | -no-compress] [-free-space] [-force] [-animate-dxe] FIRMWARE IMAGE
+  biosimage replace [-o FILE] [-compress | -no-compress] [-free-space] [-force]
+                    [-animate-dxe [-animate-once | -animate-loop] [-animate-logo-frame N]]
+                    FIRMWARE IMAGE
   biosimage version
 
 FIRMWARE is a BIOS file as downloaded from the vendor (e.g. ASUS .CAP) or a raw
@@ -211,6 +213,9 @@ func cmdReplace(w io.Writer, args []string) error {
 	noCompress := fs.Bool("no-compress", false, "store the image uncompressed (default: like the original)")
 	freeSpace := fs.Bool("free-space", false, "move the logo into the free space of the main volume (experimental)")
 	animateDXE := fs.Bool("animate-dxe", false, "experimental animated GIF playback during POST (compatible firmware only)")
+	animateOnce := fs.Bool("animate-once", false, "with -animate-dxe: play once, then keep the last frame (default: as the GIF says)")
+	animateLoop := fs.Bool("animate-loop", false, "with -animate-dxe: loop until the board leaves the logo screen (default: as the GIF says)")
+	logoFrame := fs.Int("animate-logo-frame", 0, "with -animate-dxe: the GIF frame, from 0, to store as the regular boot logo")
 	force := fs.Bool("force", false, "continue despite image and Boot Guard warnings")
 	guidStr := guidFlag(fs)
 	pos, err := parse(fs, args, 2)
@@ -247,6 +252,12 @@ func cmdReplace(w io.Writer, args []string) error {
 	if *animateDXE && (guid != uefi.LogoFileGUID || *compress || *noCompress || *freeSpace) {
 		return usageError("-animate-dxe requires the standard logo GUID and cannot be combined with -compress, -no-compress or -free-space")
 	}
+	if (*animateOnce || *animateLoop || *logoFrame != 0) && !*animateDXE {
+		return usageError("-animate-once, -animate-loop and -animate-logo-frame require -animate-dxe")
+	}
+	if *animateOnce && *animateLoop {
+		return usageError("-animate-once and -animate-loop exclude each other")
+	}
 	if !*animateDXE {
 		info, err := uefi.InspectImage(img)
 		if err != nil {
@@ -278,7 +289,14 @@ func cmdReplace(w io.Writer, args []string) error {
 	var p *uefi.Patch
 	if *animateDXE {
 		// This path has strict compatibility/protection checks: -force cannot bypass them.
-		p, err = root.ReplaceAnimatedLogo(img, guid)
+		anim := uefi.AnimationOptions{LogoFrame: *logoFrame}
+		switch {
+		case *animateOnce:
+			anim.Repeat = uefi.RepeatOnce
+		case *animateLoop:
+			anim.Repeat = uefi.RepeatForever
+		}
+		p, err = root.ReplaceAnimatedLogo(img, guid, anim)
 	} else {
 		p, err = uefi.ReplaceLogo(buf, img, guid, opt)
 	}
@@ -306,7 +324,7 @@ func cmdReplace(w io.Writer, args []string) error {
 	}
 	fmt.Fprintf(w, "wrote %s (verified)\n", dst)
 	if *animateDXE {
-		fmt.Fprintln(w, "Experimental POST animation added; the first frame is the normal boot logo fallback. Keep USB BIOS FlashBack or another recovery method available.")
+		fmt.Fprintln(w, "Experimental POST animation added; the normal boot logo is one of its frames, as a fallback. Keep USB BIOS FlashBack or another recovery method available.")
 	}
 	if c := root.Capsule; c != nil && c.Signed {
 		fmt.Fprintf(w, "\nnote: the input is signed (%s).\n%s\n", c.Kind, wrap(c.FlashNote(), "", 90))

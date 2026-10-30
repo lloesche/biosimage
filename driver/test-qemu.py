@@ -87,7 +87,7 @@ def check_log(case, log):
             raise RuntimeError(f"Input rejection case {case} failed:\n{text}")
         return
     stop = ("timeout-stop", "state-stop", "exit-stop", "state-stop", "unload",
-            "timeout-stop", "", "", "unload", "", "timeout-stop")[case]
+            "timeout-stop", "", "", "unload", "", "timeout-stop", "timeout-stop")[case]
     if "FAIL" in text or "PASS" not in text or "animlogo: draw" not in text or f"animlogo: {stop}" not in text:
         raise RuntimeError(f"Case {case} failed:\n{text}")
     if re.search(r"animlogo: (?:timeout|state|exit)-stop\n(?:(?!animlogo: started)[\s\S])*?animlogo: draw", text):
@@ -100,6 +100,8 @@ def check_log(case, log):
         raise RuntimeError("No animation redraw after GOP mode change")
     if case == 10 and "bootcheck: blt-retry" not in text:
         raise RuntimeError("Failed GOP frame not retried")
+    if case == 11 and ("animlogo: hold" not in text or "bootcheck: animation-hold" not in text):
+        raise RuntimeError("Play-once animation did not hold its last frame")
     if case == 0:
         check_placement()
 
@@ -136,7 +138,7 @@ def main():
     embed_driver(test_image)
     fat = BUILD / "fat"
     (fat / "EFI/BOOT").mkdir(parents=True, exist_ok=True)
-    for case in range(11):
+    for case in range(12):
         run([tool("clang", args.toolchain), *FLAGS, f"-DTEST_CASE={case}", "-c", "bootcheck.c", "-o", "build/bootcheck.obj"])
         run([tool("lld-link", args.toolchain), "/subsystem:efi_application", "/entry:efi_main", "/nodefaultlib",
              "/machine:x64", "/out:build/fat/EFI/BOOT/BOOTX64.EFI", "build/bootcheck.obj"])
@@ -171,7 +173,7 @@ def main():
     production_after = hashlib.sha256(production.read_bytes()).hexdigest() if production.exists() else None
     if before != after or production_before != production_after:
         raise RuntimeError("Test builds replaced the production asset")
-    print("All 11 OVMF scenarios passed; production driver unchanged", flush=True)
+    print("All 12 OVMF scenarios passed; production driver unchanged", flush=True)
 
 
 if __name__ == "__main__":

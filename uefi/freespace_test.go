@@ -187,7 +187,7 @@ func TestFirmwareTiming(t *testing.T) {
 	for _, c := range []*image.RGBA{filled(8, 8, red), filled(8, 8, green), filled(8, 8, blue)} {
 		frames = append(frames, c)
 	}
-	b, err := EncodeGIF(frames, []int{10, 20, 30}, false)
+	b, _, err := EncodeGIF(frames, []int{10, 20, 30}, 0, false)
 	if err != nil {
 		t.Fatal(err)
 	}

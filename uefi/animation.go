@@ -7,7 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"image"
-	"slices"
+	"image/color"
+	"image/draw"
 )
 
 // animlogo.efi is our own freestanding DXE driver, built from driver/animlogo.c.
@@ -22,12 +23,35 @@ var AnimationDataGUID = MustParseGUID("6EDB8A32-70A0-4B5D-B131-0277F602E529")
 const animationHeader = 12 + 256*4
 const maxAnimationData = 16 << 20
 
-// EncodeBootAnimation returns our bounded BIA1 frame stream and a first-frame BMP.
-// Each record stores a delay in 10ms units and a changed rectangle of palette indices.
-// Delays belong to the frame being displayed (no AMITSE timing rotation).
-func EncodeBootAnimation(a *Animation) ([]byte, []byte, error) {
+// Repeat says how often the driver plays an animation.
+type Repeat int
+
+const (
+	RepeatAsGIF   Repeat = iota // as often as the GIF's loop count says
+	RepeatForever               // until the board leaves the logo screen
+	RepeatOnce                  // once, then the last frame stays
+)
+
+// AnimationOptions control how the driver animation plays.
+type AnimationOptions struct {
+	Repeat Repeat
+	// LogoFrame is the frame of the GIF, from 0, stored as the regular boot logo: the BIOS
+	// shows it if the driver does not run.
+	LogoFrame int
+}
+
+// EncodeBootAnimation returns our bounded BIA2 frame stream and frame logoFrame as a BMP.
+// The header holds a.Plays; each record stores a delay in 10ms units and a changed rectangle
+// of palette indices. Delays belong to the frame being displayed (no AMITSE timing rotation).
+func EncodeBootAnimation(a *Animation, logoFrame int) ([]byte, []byte, error) {
 	if a == nil || len(a.Frames) < 2 || len(a.Frames) > 3000 || len(a.Delays) != len(a.Frames) {
 		return nil, nil, errors.New("animation needs 2–3000 frames and matching delays")
+	}
+	if a.Plays < 0 || a.Plays > maxAnimationPlays {
+		return nil, nil, errors.New("animation play count out of range")
+	}
+	if logoFrame < 0 || logoFrame >= len(a.Frames) {
+		return nil, nil, fmt.Errorf("no frame %d for the logo: the animation has %d", logoFrame, len(a.Frames))
 	}
 	if a.Frames[0] == nil {
 		return nil, nil, errors.New("missing first animation frame")
@@ -45,15 +69,16 @@ func EncodeBootAnimation(a *Animation) ([]byte, []byte, error) {
 	pal := gifPalette(a.Frames)
 	index := paletteIndex(pal)
 	out := make([]byte, animationHeader)
-	copy(out, "BIA1")
+	copy(out, "BIA2")
 	binary.LittleEndian.PutUint16(out[4:], uint16(w))
 	binary.LittleEndian.PutUint16(out[6:], uint16(h))
-	binary.LittleEndian.PutUint32(out[8:], uint32(len(a.Frames)))
+	binary.LittleEndian.PutUint16(out[8:], uint16(len(a.Frames)))
+	binary.LittleEndian.PutUint16(out[10:], uint16(a.Plays))
 	for i, c := range pal {
 		cr, cg, cb, _ := c.RGBA()
 		copy(out[12+4*i:], []byte{byte(cb >> 8), byte(cg >> 8), byte(cr >> 8), 0})
 	}
-	var last *image.Paletted
+	var last, logo *image.Paletted
 	for i, f := range a.Frames {
 		delay := max(MinFrameDelay, a.Delays[i])
 		if delay > 6000 {
@@ -83,17 +108,14 @@ func EncodeBootAnimation(a *Animation) ([]byte, []byte, error) {
 			out = append(out, p.Pix[y*p.Stride+rect.Min.X:y*p.Stride+rect.Max.X]...)
 		}
 		last = p
-	}
-	// Quantized frame zero exactly matches the first driver frame.
-	first := image.NewRGBA(image.Rect(0, 0, w, h))
-	for y := 0; y < h; y++ {
-		for x := 0; x < w; x++ {
-			j := int(out[animationHeader+12+y*w+x])
-			base := 12 + 4*j
-			first.SetRGBA(x, y, keyColor(uint32(out[base+2])<<16|uint32(out[base+1])<<8|uint32(out[base])))
+		if i == logoFrame {
+			logo = p
 		}
 	}
-	bmp, err := EncodeImage(first, "BMP", 100)
+	// The quantized frame exactly matches the driver's frame.
+	rgba := image.NewRGBA(logo.Rect)
+	draw.Draw(rgba, rgba.Rect, logo, image.Point{}, draw.Src)
+	bmp, err := EncodeImage(rgba, "BMP", 100)
 	return out, bmp, err
 }
 
@@ -135,10 +157,10 @@ func (n *Node) animationTarget() (*FreeSpace, error) {
 	return fs, nil
 }
 
-// ReplaceAnimatedLogo returns a copy of image n with a first-frame fallback for the logo, our
+// ReplaceAnimatedLogo returns a copy of image n with a frame of gif as the logo, our
 // DXE driver, and a separate compressed frame-data file in FV_MAIN. It reuses what is already
 // unpacked of n, and does not modify it.
-func (n *Node) ReplaceAnimatedLogo(gif []byte, guid GUID) (*Patch, error) {
+func (n *Node) ReplaceAnimatedLogo(gif []byte, guid GUID, opt AnimationOptions) (*Patch, error) {
 	if guid != LogoFileGUID {
 		return nil, errors.New("driver animation only supports the standard boot-logo GUID")
 	}
@@ -154,22 +176,28 @@ func (n *Node) ReplaceAnimatedLogo(gif []byte, guid GUID) (*Patch, error) {
 	if err != nil {
 		return nil, err
 	}
-	data, first, err := EncodeBootAnimation(a)
+	switch opt.Repeat {
+	case RepeatForever:
+		a.Plays = 0
+	case RepeatOnce:
+		a.Plays = 1
+	}
+	data, logo, err := EncodeBootAnimation(a, opt.LogoFrame)
 	if err != nil {
 		return nil, err
 	}
 	if err := validateAnimationDriver(animationDriver); err != nil {
 		return nil, err
 	}
-	p, err := ReplaceLogo(n.Bytes(), first, guid, ReplaceOptions{})
+	p, err := ReplaceLogo(n.Bytes(), logo, guid, ReplaceOptions{})
 	if err != nil {
-		return nil, fmt.Errorf("first-frame fallback: %w", err)
+		return nil, fmt.Errorf("fallback logo: %w", err)
 	}
-	// The fallback may have changed the main volume (if the logo is inside it), but not where
+	// The logo may have changed the main volume (if the logo is inside it), but not where
 	// it is: take it from the patched image, which needs nothing unpacked.
 	vol := topVolumeAt(p.Root, target.Volume.Offset)
 	if vol == nil {
-		return nil, errors.New("main volume not found after writing the first-frame fallback")
+		return nil, errors.New("main volume not found after writing the fallback logo")
 	}
 	fs, err := freeSpaceIn(vol)
 	if err != nil {
@@ -210,10 +238,10 @@ func (n *Node) ReplaceAnimatedLogo(gif []byte, guid GUID) (*Patch, error) {
 		p.AnimationSize -= left.Capacity
 	}
 	p.Root = Parse(p.Data)
-	if err := hasFiles(topVolumeAt(p.Root, vol.Offset), AnimationDataGUID, AnimationDriverGUID); err != nil {
+	if err := checkAnimation(topVolumeAt(p.Root, vol.Offset), data); err != nil {
 		return nil, err
 	}
-	p.Logos, err = verifyLogos(p.Root, guid, first, len(p.Changes))
+	p.Logos, err = verifyLogos(p.Root, guid, logo, len(p.Changes))
 	if err != nil {
 		return nil, err
 	}
@@ -233,21 +261,99 @@ func topVolumeAt(root *Node, off int) *Node {
 	return nil
 }
 
-// hasFiles checks that volume vol, read afresh, has a file with each of guids.
-func hasFiles(vol *Node, guids ...GUID) error {
+// checkAnimation checks that volume vol of a freshly parsed image has the animation driver,
+// and an animation data file that reads back as data.
+func checkAnimation(vol *Node, data []byte) error {
 	if vol == nil {
 		return errors.New("main volume not found after adding the animation")
 	}
-	files, _, err := vol.Volume.Files(vol.Buf.Data)
-	if err != nil {
-		return err
-	}
-	for _, g := range guids {
-		if !slices.ContainsFunc(files, func(f File) bool { return f.GUID == g }) {
-			return fmt.Errorf("file %s missing from the main volume after adding it", g)
+	var driver, frames *Node
+	for _, c := range vol.Children {
+		if c.Kind == KindFile && c.File.GUID == AnimationDriverGUID {
+			driver = c
+		}
+		if c.Kind == KindFile && c.File.GUID == AnimationDataGUID {
+			frames = c
 		}
 	}
+	if driver == nil || frames == nil {
+		return errors.New("animation driver or data file missing from the main volume after adding it")
+	}
+	got, err := frames.BootAnimationData()
+	if err != nil || !bytes.Equal(got, data) {
+		return fmt.Errorf("animation data does not read back from the main volume: %v", err)
+	}
 	return nil
+}
+
+// BootAnimationData returns the frame data (EncodeBootAnimation) in file n, an animation data
+// file added by Node.ReplaceAnimatedLogo, unpacking its compressed section.
+func (n *Node) BootAnimationData() ([]byte, error) {
+	if n.Kind != KindFile || n.File.GUID != AnimationDataGUID {
+		return nil, errors.New("not an animation data file")
+	}
+	var raw *Node
+	var err error
+	n.Walk(func(c *Node) bool {
+		if c.Lazy() {
+			err = c.Expand()
+		}
+		if c.Kind == KindSection && c.Section.Type == SectionRaw {
+			raw = c
+		}
+		return raw == nil && err == nil
+	})
+	switch {
+	case err != nil:
+		return nil, err
+	case raw == nil:
+		return nil, errors.New("animation data file without a raw section")
+	}
+	return raw.Section.Body(), nil
+}
+
+// DecodeBootAnimation returns the complete frames of frame data b (EncodeBootAnimation), each
+// with its delay, as the driver shows them.
+func DecodeBootAnimation(b []byte) (*Animation, error) {
+	if len(b) < animationHeader || string(b[:4]) != "BIA2" {
+		return nil, errors.New("not biosimage animation data")
+	}
+	w, h := int(binary.LittleEndian.Uint16(b[4:])), int(binary.LittleEndian.Uint16(b[6:]))
+	count := int(binary.LittleEndian.Uint16(b[8:]))
+	if w < 1 || h < 1 || w > 1920 || h > 1080 || count < 1 || count > 3000 || uint64(w)*uint64(h)*uint64(count) > maxAnimationPixels {
+		return nil, errors.New("animation data exceeds the limits")
+	}
+	var pal [256]color.RGBA
+	for i := range pal {
+		c := b[12+4*i:] // blue, green, red, 0
+		pal[i] = color.RGBA{c[2], c[1], c[0], 0xFF}
+	}
+	canvas := image.NewRGBA(image.Rect(0, 0, w, h))
+	a := &Animation{Plays: int(binary.LittleEndian.Uint16(b[10:]))}
+	p := animationHeader
+	for i := range count {
+		if p+12 > len(b) {
+			return nil, fmt.Errorf("animation data truncated at frame %d", i)
+		}
+		var v [5]int // delay, x, y, width, height
+		for j := range v {
+			v[j] = int(binary.LittleEndian.Uint16(b[p+2*j:]))
+		}
+		r := image.Rect(v[1], v[2], v[1]+v[3], v[2]+v[4])
+		p += 12
+		if r.Empty() || !r.In(canvas.Rect) || p+r.Dx()*r.Dy() > len(b) {
+			return nil, fmt.Errorf("animation frame %d out of bounds", i)
+		}
+		for y := r.Min.Y; y < r.Max.Y; y++ {
+			for x := r.Min.X; x < r.Max.X; x++ {
+				canvas.SetRGBA(x, y, pal[b[p]])
+				p++
+			}
+		}
+		a.Frames = append(a.Frames, clone(canvas))
+		a.Delays = append(a.Delays, v[0])
+	}
+	return a, nil
 }
 
 func validateAnimationDriver(b []byte) error {

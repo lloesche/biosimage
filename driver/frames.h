@@ -1,4 +1,4 @@
-// BIA1 v1: little-endian header, BGRA palette, bounded changed rectangles.
+// BIA2: little-endian header with a play count, BGRA palette, bounded changed rectangles.
 #ifndef ANIMLOGO_FRAMES_H
 #define ANIMLOGO_FRAMES_H
 #include "efi.h"
@@ -10,10 +10,10 @@ typedef struct {
 } FRAME;
 typedef struct {
   UINTN Width, Height, Count;
+  UINTN Plays; // 0 loops forever, n plays n times and then holds the last frame
   const UINT8 *Palette;
 } ANIMATION;
 static UINT16 le16(const UINT8 *p) { return (UINT16)(p[0] | ((UINT16)p[1] << 8)); }
-static UINT32 le32(const UINT8 *p) { return le16(p) | ((UINT32)le16(p+2) << 16); }
 static UINTN parse_frame(const UINT8 *p, FRAME *f) {
   f->Delay=le16(p); f->X=le16(p+2); f->Y=le16(p+4);
   f->Width=le16(p+6); f->Height=le16(p+8); f->Indices=p+12;
@@ -22,8 +22,8 @@ static UINTN parse_frame(const UINT8 *p, FRAME *f) {
 // Validate the entire stream before exposing any frame pointer or allocating the canvas.
 // Frames may be NULL for a validation-only pass, then populated after allocation.
 static BOOLEAN parse_animation(const UINT8 *b, UINTN size, ANIMATION *a, FRAME *frames) {
-  if (!b || size<FRAME_HEADER || size>MAX_ANIMATION_BYTES || b[0]!='B' || b[1]!='I' || b[2]!='A' || b[3]!='1') return FALSE;
-  a->Width=le16(b+4); a->Height=le16(b+6); a->Count=le32(b+8); a->Palette=b+12;
+  if (!b || size<FRAME_HEADER || size>MAX_ANIMATION_BYTES || b[0]!='B' || b[1]!='I' || b[2]!='A' || b[3]!='2') return FALSE;
+  a->Width=le16(b+4); a->Height=le16(b+6); a->Count=le16(b+8); a->Plays=le16(b+10); a->Palette=b+12;
   if (!a->Width || !a->Height || a->Width>1920 || a->Height>1080 || !a->Count || a->Count>3000) return FALSE;
   UINTN off=FRAME_HEADER;
   for (UINTN i=0;i<a->Count;i++) {

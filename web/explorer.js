@@ -11,7 +11,7 @@ import { call } from './wasm.js';
 const HEX_ROWS = 16;
 
 const nc = {
-  sources: { orig: null, patched: null }, // { id, nodes: Map, root, logoPath }; id is the image
+  sources: { orig: null, patched: null }, // { id, nodes: Map, root, logoPath, animPath }; id is the image
   pending: { orig: 0, patched: 0 }, // images whose tree has not been fetched yet
   loading: null, // { id, promise } of the fetch in progress
   src: 'orig',
@@ -47,8 +47,14 @@ function ncSetImage(which, id) {
   }
   if (nc.src === which) {
     nc.cwd = null;
+    ncButtons();
     if (nc.visible) ncEnsure();
   }
+}
+
+// ncButtons offers [A] for an image that has a boot animation (the patched one, if any).
+function ncButtons() {
+  $('nc-anim').hidden = !ncSource()?.animPath.length;
 }
 
 // ncLoad fetches the tree of image id for the given source.
@@ -56,7 +62,7 @@ async function ncLoad(which, id) {
   $('nc-status').textContent = 'Reading firmware structure…';
   const res = await call('explore', [id], 'Reading the firmware structure');
   if (res.error || nc.pending[which] !== id) return; // replaced meanwhile
-  const src = { id, nodes: new Map(), root: res.root, logoPath: res.logoPath };
+  const src = { id, nodes: new Map(), root: res.root, logoPath: res.logoPath, animPath: res.animationPath };
   ncIndex(src, res.root, undefined);
   nc.sources[which] = src;
   nc.pending[which] = 0;
@@ -72,6 +78,7 @@ async function ncEnsure() {
     await nc.loading.promise;
   }
   const src = ncSource();
+  ncButtons();
   if (src && !nc.cwd) {
     nc.cwd = src.root;
     nc.sel = 0;
@@ -101,13 +108,13 @@ function ncRender() {
   $('nc-list').replaceChildren(...nc.rows.map((r, i) => {
     const n = r.node;
     const dirRow = r.up || ncIsDir(n);
-    const name = r.up ? '..' : `${n.logo ? '★ ' : dirRow ? '▸ ' : '  '}${n.name}`;
+    const name = r.up ? '..' : `${n.logo ? '★ ' : n.animation ? '◆ ' : dirRow ? '▸ ' : '  '}${n.name}`;
     const row = el('div', { className: 'nc-row', role: 'option' },
       el('span', { textContent: name }),
       el('span', { textContent: r.up ? '' : ncSize(n.size) }),
       el('span', { textContent: r.up ? 'UP--DIR' : (n.lazy ? 'compressed' : n.type) + ncChecksumMark(n) }));
     row.classList.toggle('dir', dirRow);
-    row.classList.toggle('haslogo', !r.up && (n.hasLogo || n.logo));
+    row.classList.toggle('haslogo', !r.up && (n.hasLogo || n.logo || n.animation));
     row.addEventListener('click', () => ncSelect(i));
     row.addEventListener('dblclick', () => ncOpen(i));
     return row;
@@ -161,14 +168,23 @@ async function ncInfo(n) {
   for (const [k, v] of n.info) if (k !== 'GUID') facts.push([k, v]);
   if (n.logo) facts.push(['Boot logo', 'this is the file biosimage replaces']);
   else if (n.hasLogo) facts.push(['Boot logo', 'inside']);
+  if (n.animation) facts.push(['Boot animation', 'added by biosimage; the preview plays the frames read back from this BIOS']);
   if (n.lazy) facts.push(['Open', 'press Enter to decompress']);
   const img = ncImageNode(n);
   if (img && img !== n) facts.push(['Contains', img.name.replace(/^Image: /, 'image ')]);
   $('nc-info-title').textContent = n.name;
   $('nc-info').replaceChildren(...facts.flatMap(([k, v]) => [el('dt', { textContent: k }), el('dd', { textContent: v })]));
   $('nc-status').textContent = `${hex8(n.offset)}${where} · ${fmtNum(n.size)} bytes · ${n.type || n.kind}`;
-  $('nc-preview').hidden = !img;
-  if (img) {
+  $('nc-preview').hidden = !img && !n.animation;
+  if (n.animation) {
+    // Both animation files show the animation, decoded from the frame data in the firmware.
+    const res = await call('animationPreview', [ncSource().id], 'Reading the animation');
+    if (ncSelected() !== n) return;
+    const repeat = res.plays === 0 ? 'loops' : res.plays === 1 ? 'plays once' : `plays ${res.plays} times`;
+    const fact = res.error || `${res.frames} frames, ${res.width}×${res.height}, ${(res.loop / 1000).toFixed(1)} s per loop, ${repeat}`;
+    $('nc-info').append(el('dt', { textContent: 'Animation' }), el('dd', { textContent: fact }));
+    if (res.data) $('nc-img').src = objectURL('ncImage', res.data, MIME.GIF);
+  } else if (img) {
     const res = await call('nodeBytes', [ncSource().id, img.id, img.imageOffset, img.size - img.imageOffset]);
     if (res.data && ncSelected() === n) $('nc-img').src = objectURL('ncImage', res.data, MIME[img.image] || 'application/octet-stream');
   }
@@ -240,21 +256,26 @@ function ncUp() {
   ncRender();
 }
 
-// ncGoLogo selects the logo file. explore returns the path to it, all of it already unpacked.
-async function ncGoLogo() {
+// ncGoTo selects the node at the end of a path that explore returned (to the logo file or the
+// animation driver), all of it already unpacked; missing says why there is none.
+async function ncGoTo(key, missing) {
   await ncEnsure();
   const src = ncSource();
   if (!src) return;
-  const logo = src.nodes.get(src.logoPath[src.logoPath.length - 1]);
-  if (!logo) {
-    $('nc-status').textContent = 'No boot logo file found in this image.';
+  const path = src[key];
+  const n = src.nodes.get(path[path.length - 1]);
+  if (!n) {
+    $('nc-status').textContent = missing;
     return;
   }
-  nc.cwd = src.nodes.get(logo.parentId);
-  nc.sel = nc.cwd.children.indexOf(logo) + (nc.cwd.parentId !== undefined ? 1 : 0);
+  nc.cwd = src.nodes.get(n.parentId);
+  nc.sel = nc.cwd.children.indexOf(n) + (nc.cwd.parentId !== undefined ? 1 : 0);
   ncRender();
   $('nc-list').focus({ preventScroll: true });
 }
+
+const ncGoLogo = () => ncGoTo('logoPath', 'No boot logo file found in this image.');
+const ncGoAnimation = () => ncGoTo('animPath', 'This image has no boot animation.');
 
 function onKey(e) {
   if (e.ctrlKey || e.metaKey || e.altKey) return;
@@ -272,6 +293,8 @@ function onKey(e) {
     ArrowLeft: ncUp,
     l: ncGoLogo,
     L: ncGoLogo,
+    a: ncGoAnimation,
+    A: ncGoAnimation,
     '[': () => ncHexPage(-1),
     ']': () => ncHexPage(1),
   };
@@ -292,6 +315,7 @@ export function initExplorer() {
   $('nc-list').addEventListener('mousedown', ncEnsure);
   $('step-explore').addEventListener('focusin', () => setTimeout(ncEnsure, 0));
   $('nc-logo').addEventListener('click', ncGoLogo);
+  $('nc-anim').addEventListener('click', ncGoAnimation);
   $('nc-hex-prev').addEventListener('click', () => ncHexPage(-1));
   $('nc-hex-next').addEventListener('click', () => ncHexPage(1));
   for (const r of document.querySelectorAll('input[name=nc-src]')) {

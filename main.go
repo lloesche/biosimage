@@ -278,7 +278,7 @@ func cmdReplace(w io.Writer, args []string) error {
 	var p *uefi.Patch
 	if *animateDXE {
 		// This path has strict compatibility/protection checks: -force cannot bypass them.
-		p, err = uefi.ReplaceAnimatedLogo(buf, img, guid)
+		p, err = root.ReplaceAnimatedLogo(img, guid)
 	} else {
 		p, err = uefi.ReplaceLogo(buf, img, guid, opt)
 	}

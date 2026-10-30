@@ -1,0 +1,6 @@
+# Normalize text in commits and checkouts, independently of core.autocrlf.
+* text=auto eol=lf
+
+*.efi -text
+*.png -text
+*.ttf -text

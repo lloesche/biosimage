@@ -69,13 +69,25 @@ var ErrNoFreeSpace = errors.New("no main volume with free space for the logo")
 // (TSECode). Moving the logo is experimental: this is verified in the firmware code, not on a
 // running board.
 func (n *Node) FreeSpace() (*FreeSpace, error) {
-	if !n.TSECode().AnyVolumeLogo {
+	return n.freeSpace(n.TSECode())
+}
+
+// freeSpace is FreeSpace with the facts c of n's AMITSE code, so that callers who have them need
+// not disassemble it again.
+func (n *Node) freeSpace(c TSECode) (*FreeSpace, error) {
+	if !c.AnyVolumeLogo {
 		return nil, ErrNoFreeSpace
 	}
 	vol := n.layoutVolume(mainVolumeGUID)
 	if vol == nil {
 		return nil, ErrNoFreeSpace
 	}
+	return freeSpaceIn(vol)
+}
+
+// freeSpaceIn returns the free space after the last file of volume vol, which must be erased.
+// It reads the volume's current bytes, so it also measures what is left after files were added.
+func freeSpaceIn(vol *Node) (*FreeSpace, error) {
 	_, used, err := vol.Volume.Files(vol.Buf.Data)
 	if err != nil {
 		return nil, err

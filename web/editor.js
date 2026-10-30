@@ -26,6 +26,7 @@ const ed = {
   loads: 0, // to drop an image that has been replaced by another one while loading
   timer: 0,
   animationSupported: false,
+  savedStorage: null, // the storage choices to restore once the animation is deselected
   choices: outputChoices([{ format: 'BMP' }], false, false),
   fitGeneration: 0,
 };
@@ -72,7 +73,8 @@ async function encode(selected) {
       return ctx.getImageData(0, 0, w, h).data;
     });
     const full = selected.frameStorage && document.querySelector('input[name=store]:checked').value === 'full';
-    res = await call('encodeAnimation', [frames, w, h, shown.map((f) => f.delay), full]);
+    res = await call('encodeAnimation', [frames, w, h, shown.map((f) => f.delay), full], 'Encoding the animation',
+      frames.map((f) => f.buffer));
   } else {
     const px = $('canvas').getContext('2d').getImageData(0, 0, w, h).data;
     res = await call('encodeImage', [px, w, h, selected.format, Number($('quality').value)]);
@@ -94,6 +96,7 @@ export function blocked() {
 // formats known without reading the logo code (state.fwInfo.formats).
 export function setFirmware() {
   ed.animationSupported = false;
+  ed.savedStorage = null;
   const logo = state.fwInfo.logos[0];
   $('compress').checked = logo.lzma; // like the original
   $('compress-label').hidden = logo.rawFile; // a raw file cannot hold a compressed image
@@ -242,7 +245,17 @@ function sourceSize() {
 function updateControls() {
   const selected = selection();
   $('animation-warning').hidden = !selected.requiresFit;
-  $('compress').disabled = $('free-space').disabled = !selected.logoStorage;
+  // The animation's storage is fixed: driver and frames go LZMA-compressed into the free space.
+  // Show that, and give the logo's own choices back afterwards.
+  const fixed = !selected.logoStorage;
+  if (fixed && !ed.savedStorage) {
+    ed.savedStorage = { compress: $('compress').checked, free: $('free-space').checked };
+    $('compress').checked = $('free-space').checked = true;
+  } else if (!fixed && ed.savedStorage) {
+    ({ compress: $('compress').checked, free: $('free-space').checked } = ed.savedStorage);
+    ed.savedStorage = null;
+  }
+  $('compress').disabled = $('free-space').disabled = fixed;
   for (const r of [$('scale'), $('quality')]) r.style.setProperty('--p', `${((r.value - r.min) / (r.max - r.min)) * 100}%`);
   $('scale-out').textContent = `${$('scale').value}%`;
   $('quality-out').textContent = $('quality').value;
@@ -352,7 +365,8 @@ function showOutput() {
     try {
       ({ data: bytes, preview, options } = await prepareOutput(selected));
       if (version !== ed.version || generation !== ed.fitGeneration) return;
-      fit = await call('fitLogo', [firmware, bytes, options]);
+      // The animation is built in full to check it: every frame compressed, the patch verified.
+      fit = await call('fitLogo', [firmware, bytes, options], selected.requiresFit ? 'Building the animation' : '');
     } catch (err) {
       if (version === ed.version && generation === ed.fitGeneration) $('preview-caption').textContent = `${caption} · ${err.message}`;
       return;
@@ -372,14 +386,13 @@ function showFit(fit) {
   ed.fit = fit.animationDXE ? fit : fit.error && !fit.size ? null : fit; // e.g. no logo: Build reports it
   $('space-field').hidden = !ed.fit;
   if (ed.fit) {
-    $('space-bar').parentElement.style.display = fit.animationDXE ? 'none' : '';
     const { size, capacity, fits } = fit;
+    const sized = size !== undefined; // an animation that does not fit has no size, only its error
+    $('space-bar').parentElement.style.display = sized ? '' : 'none';
     const bar = $('space-bar');
-    bar.style.width = fit.animationDXE ? '0%' : `${Math.min(100, (size / capacity) * 100).toFixed(1)}%`;
+    bar.style.width = sized ? `${Math.min(100, (size / capacity) * 100).toFixed(1)}%` : '0%';
     bar.classList.toggle('over', !fits);
-    $('space-size').textContent = fit.animationDXE
-      ? fits ? fit.storage : 'Animation does not fit or is incompatible'
-      : `${fmtNum(size)} / ${fmtNum(capacity)} bytes · ${fit.storage}`;
+    $('space-size').textContent = sized ? `${fmtNum(size)} / ${fmtNum(capacity)} bytes · ${fit.storage}` : '';
   }
   const tip = (!$('compress-label').hidden && !$('compress').checked ? 'Store it compressed. ' : '') +
     ({ BMP: 'Choose JPEG, or make the canvas or the logo smaller.', JPEG: 'Lower the quality, or make the canvas smaller.',

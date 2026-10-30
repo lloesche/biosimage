@@ -48,7 +48,7 @@ func TestAnimatedASUSFirmware(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p, err := ReplaceAnimatedLogo(fw, gif, LogoFileGUID)
+	p, err := Parse(fw).ReplaceAnimatedLogo(gif, LogoFileGUID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,6 +57,9 @@ func TestAnimatedASUSFirmware(t *testing.T) {
 	}
 	if len(p.Data) != len(fw) {
 		t.Fatal("firmware size changed")
+	}
+	if p.AnimationSize <= 0 || p.AnimationSize > p.AnimationRoom {
+		t.Fatalf("animation takes %d of %d bytes of free space", p.AnimationSize, p.AnimationRoom)
 	}
 	fs, err := Parse(before).FreeSpace()
 	if err != nil {
@@ -145,7 +148,7 @@ func TestAnimatedASUSFirmware(t *testing.T) {
 			t.Fatal("fallback does not match first frame")
 		}
 	}
-	if _, err := ReplaceAnimatedLogo(p.Data, gif, LogoFileGUID); err == nil {
+	if _, err := p.Root.ReplaceAnimatedLogo(gif, LogoFileGUID); err == nil {
 		t.Fatal("duplicate injection accepted")
 	}
 	t.Logf("verified first-frame fallback, DXE and compressed data in ASUS FV_MAIN; no firmware written")

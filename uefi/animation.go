@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"slices"
 )
 
 // animlogo.efi is our own freestanding DXE driver, built from driver/animlogo.c.
@@ -96,42 +97,53 @@ func EncodeBootAnimation(a *Animation) ([]byte, []byte, error) {
 	return out, bmp, err
 }
 
-// AnimationSupport fails closed: an image must prove all compatibility requirements.
-// A force/recovery checkbox cannot override a Boot Guard protection or missing evidence.
-func AnimationSupport(buf []byte) error {
-	bg := DetectBootGuard(buf)
+// AnimationSupport reports whether image n supports the driver animation. It fails closed: the
+// image must prove all compatibility requirements. A force/recovery checkbox cannot override
+// a Boot Guard protection or missing evidence. It reuses what is already unpacked of n:
+// AMITSE may be in a compressed volume.
+func (n *Node) AnimationSupport() error {
+	_, err := n.animationTarget()
+	return err
+}
+
+// animationTarget checks that image n supports the driver animation and returns the free space
+// of the main volume, where its files go.
+func (n *Node) animationTarget() (*FreeSpace, error) {
+	bg := DetectBootGuard(n.Bytes())
 	if bg.Manifests || len(bg.Hashed) > 0 {
-		return errors.New("driver animation is unavailable on firmware with Boot Guard evidence")
+		return nil, errors.New("driver animation is unavailable on firmware with Boot Guard evidence")
 	}
-	root := Parse(buf)
-	c := root.TSECode()
+	c := n.TSECode()
 	if !c.AnyVolumeLogo || !c.PostManagerState || !c.LogoPlacement {
-		return errors.New("experimental animation requires proven any-volume loading, post-manager state getter and logo placement")
+		return nil, errors.New("experimental animation requires proven any-volume loading, post-manager state getter and logo placement")
 	}
-	if _, err := root.FreeSpace(); err != nil {
-		return err
+	fs, err := n.freeSpace(c)
+	if err != nil {
+		return nil, err
 	}
 	var duplicate bool
-	root.expandAll()
-	root.Walk(func(n *Node) bool {
+	n.expandAll()
+	n.Walk(func(n *Node) bool {
 		if n.Kind == KindFile && (n.File.GUID == AnimationDriverGUID || n.File.GUID == AnimationDataGUID) {
 			duplicate = true
 		}
 		return true
 	})
 	if duplicate {
-		return errors.New("firmware already contains an animation driver or data file; start from the original BIOS")
+		return nil, errors.New("firmware already contains an animation driver or data file; start from the original BIOS")
 	}
-	return nil
+	return fs, nil
 }
 
-// ReplaceAnimatedLogo inserts a first-frame fallback, our DXE driver, and a separate
-// compressed frame-data file into FV_MAIN. The input slice is never modified.
-func ReplaceAnimatedLogo(buf, gif []byte, guid GUID) (*Patch, error) {
+// ReplaceAnimatedLogo returns a copy of image n with a first-frame fallback for the logo, our
+// DXE driver, and a separate compressed frame-data file in FV_MAIN. It reuses what is already
+// unpacked of n, and does not modify it.
+func (n *Node) ReplaceAnimatedLogo(gif []byte, guid GUID) (*Patch, error) {
 	if guid != LogoFileGUID {
 		return nil, errors.New("driver animation only supports the standard boot-logo GUID")
 	}
-	if err := AnimationSupport(buf); err != nil {
+	target, err := n.animationTarget()
+	if err != nil {
 		return nil, err
 	}
 	info, err := InspectImage(gif)
@@ -149,14 +161,21 @@ func ReplaceAnimatedLogo(buf, gif []byte, guid GUID) (*Patch, error) {
 	if err := validateAnimationDriver(animationDriver); err != nil {
 		return nil, err
 	}
-	p, err := ReplaceLogo(buf, first, guid, ReplaceOptions{})
+	p, err := ReplaceLogo(n.Bytes(), first, guid, ReplaceOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("first-frame fallback: %w", err)
 	}
-	fs, err := p.Root.FreeSpace()
+	// The fallback may have changed the main volume (if the logo is inside it), but not where
+	// it is: take it from the patched image, which needs nothing unpacked.
+	vol := topVolumeAt(p.Root, target.Volume.Offset)
+	if vol == nil {
+		return nil, errors.New("main volume not found after writing the first-frame fallback")
+	}
+	fs, err := freeSpaceIn(vol)
 	if err != nil {
 		return nil, err
 	}
+	p.AnimationRoom = fs.Capacity
 	// PUSH GOP, END: dispatch only after graphics is available. Still retry GOP and the
 	// AMI protocol at runtime; GOP mode information can change during POST.
 	gopGUID := MustParseGUID("9042A9DE-23DC-4A38-96FB-7ADED080516A")
@@ -179,17 +198,21 @@ func ReplaceAnimatedLogo(buf, gif []byte, guid GUID) (*Patch, error) {
 		guid  GUID
 		bytes []byte
 	}{{AnimationDataGUID, af}, {AnimationDriverGUID, df}} {
-		// Reparse after each append: each addition independently verifies unchanged files.
-		fs, err = Parse(p.Data).FreeSpace()
-		if err != nil {
-			return nil, err
-		}
+		// addFile reads the volume's current files, so both go into vol one after the other;
+		// each addition verifies that the files before it are unchanged.
 		patcher := &patcher{before: map[*Buffer][]byte{}}
-		if _, err = patcher.addFile(fs.Volume, f.bytes, f.guid, 8); err != nil {
+		if _, err = patcher.addFile(vol, f.bytes, f.guid, 8); err != nil {
 			return nil, err
 		}
 	}
+	p.AnimationSize = p.AnimationRoom
+	if left, err := freeSpaceIn(vol); err == nil {
+		p.AnimationSize -= left.Capacity
+	}
 	p.Root = Parse(p.Data)
+	if err := hasFiles(topVolumeAt(p.Root, vol.Offset), AnimationDataGUID, AnimationDriverGUID); err != nil {
+		return nil, err
+	}
 	p.Logos, err = verifyLogos(p.Root, guid, first, len(p.Changes))
 	if err != nil {
 		return nil, err
@@ -198,6 +221,33 @@ func ReplaceAnimatedLogo(buf, gif []byte, guid GUID) (*Patch, error) {
 		return nil, errors.New("animation changed a protected firmware range")
 	}
 	return p, nil
+}
+
+// topVolumeAt returns the top-level volume of image root at offset off, or nil.
+func topVolumeAt(root *Node, off int) *Node {
+	for _, c := range root.Children {
+		if c.Kind == KindVolume && c.Offset == off {
+			return c
+		}
+	}
+	return nil
+}
+
+// hasFiles checks that volume vol, read afresh, has a file with each of guids.
+func hasFiles(vol *Node, guids ...GUID) error {
+	if vol == nil {
+		return errors.New("main volume not found after adding the animation")
+	}
+	files, _, err := vol.Volume.Files(vol.Buf.Data)
+	if err != nil {
+		return err
+	}
+	for _, g := range guids {
+		if !slices.ContainsFunc(files, func(f File) bool { return f.GUID == g }) {
+			return fmt.Errorf("file %s missing from the main volume after adding it", g)
+		}
+	}
+	return nil
 }
 
 func validateAnimationDriver(b []byte) error {

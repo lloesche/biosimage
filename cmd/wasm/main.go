@@ -8,6 +8,7 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"image"
@@ -85,6 +86,28 @@ type firmware struct {
 	free      *uefi.FreeSpace   // found by logoFormats; nil if there is none
 	bootGuard uefi.BootGuard    // what the image shows of Intel Boot Guard
 	explorer  *explorer         // created by the first explore
+	// animation is the last animation patch built by fitLogo, for replaceLogo to reuse: building
+	// one compresses every frame and takes seconds.
+	animation *animationPatch
+}
+
+type animationPatch struct {
+	gif   []byte
+	patch *uefi.Patch
+}
+
+// animatedLogo returns the animation patch of the image for gif (Node.ReplaceAnimatedLogo),
+// reusing the one fitLogo built.
+func (f *firmware) animatedLogo(gif []byte) (*uefi.Patch, error) {
+	if a := f.animation; a != nil && bytes.Equal(a.gif, gif) {
+		return a.patch, nil
+	}
+	p, err := f.root.ReplaceAnimatedLogo(gif, uefi.LogoFileGUID)
+	f.animation = nil
+	if err == nil {
+		f.animation = &animationPatch{gif: bytes.Clone(gif), patch: p}
+	}
+	return p, err
 }
 
 var (
@@ -150,7 +173,7 @@ func logoFormats(args []js.Value) map[string]any {
 	f.formats = f.root.LogoFormats(f.logos)
 	res := map[string]any{"formats": formatsJS(f.formats), "freeSpace": 0}
 	res["animationDXE"] = false
-	if err := uefi.AnimationSupport(f.root.Bytes()); err == nil {
+	if err := f.root.AnimationSupport(); err == nil {
 		res["animationDXE"] = true
 	} else {
 		res["animationReason"] = err.Error()
@@ -306,10 +329,12 @@ func fitLogo(args []js.Value) map[string]any {
 		return map[string]any{"error": "no logo in this image"}
 	}
 	if animationOption(args, 2) {
-		_, err := uefi.ReplaceAnimatedLogo(f.root.Bytes(), bytesFrom(args[1]), uefi.LogoFileGUID)
-		res := map[string]any{"animationDXE": true, "fits": err == nil, "bootGuard": "", "storage": "Animation, driver and fallback logo verified to fit"}
+		p, err := f.animatedLogo(bytesFrom(args[1]))
+		res := map[string]any{"animationDXE": true, "fits": err == nil, "bootGuard": "", "storage": animationStorage}
 		if err != nil {
 			res["error"] = err.Error()
+		} else {
+			res["size"], res["capacity"] = p.AnimationSize, p.AnimationRoom
 		}
 		return res
 	}
@@ -373,7 +398,8 @@ func replaceLogo(args []js.Value) map[string]any {
 	}
 	var p *uefi.Patch
 	if animationOption(args, 2) {
-		p, err = uefi.ReplaceAnimatedLogo(f.root.Bytes(), bytesFrom(args[1]), uefi.LogoFileGUID)
+		p, err = f.animatedLogo(bytesFrom(args[1]))
+		f.animation = nil // the patched image is opened on its own
 	} else {
 		p, err = uefi.ReplaceLogo(f.root.Bytes(), bytesFrom(args[1]), uefi.LogoFileGUID, opt)
 	}
@@ -400,9 +426,16 @@ func replaceLogo(args []js.Value) map[string]any {
 	if opt.UseFreeSpace {
 		capacity = f.free.Capacity
 	}
-	return map[string]any{"id": id, "data": bytesTo(p.Data), "changes": list, "logos": logosJS(p.Logos),
+	res := map[string]any{"id": id, "data": bytesTo(p.Data), "changes": list, "logos": logosJS(p.Logos),
 		"capacity": capacity, "bootGuard": p.BootGuardWarning, "animationDXE": animationOption(args, 2)}
+	if animationOption(args, 2) {
+		res["animationSize"], res["animationRoom"], res["animationStorage"] = p.AnimationSize, p.AnimationRoom, animationStorage
+	}
+	return res
 }
+
+// animationStorage describes where ReplaceAnimatedLogo puts the animation.
+const animationStorage = "driver and frames LZMA-compressed in the free space of the main volume; first frame as the logo"
 
 func animationOption(args []js.Value, i int) bool {
 	return len(args) > i && args[i].Truthy() && args[i].Get("animateDXE").Truthy()

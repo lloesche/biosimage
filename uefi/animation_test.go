@@ -53,10 +53,10 @@ func TestBootAnimationRectanglesAndFallback(t *testing.T) {
 func TestAnimationGateRejectsUnknownFirmwareWithoutMutation(t *testing.T) {
 	fw := buildImage(buildVolume(t, 0x8000, 0xff, rawLogoFile(t, makeBMP(8, 8, false), 0xff)))
 	before := bytes.Clone(fw)
-	if err := AnimationSupport(fw); err == nil {
+	if err := Parse(fw).AnimationSupport(); err == nil {
 		t.Fatal("unknown firmware accepted")
 	}
-	if _, err := ReplaceAnimatedLogo(fw, []byte("GIF89a"), LogoFileGUID); err == nil {
+	if _, err := Parse(fw).ReplaceAnimatedLogo([]byte("GIF89a"), LogoFileGUID); err == nil {
 		t.Fatal("unknown image patched")
 	}
 	if !bytes.Equal(before, fw) {
@@ -74,10 +74,10 @@ func TestAnimationRejectsBootGuardEvidence(t *testing.T) {
 	fw := buildImage(buildVolume(t, 0x8000, 0xff, rawLogoFile(t, makeBMP(8, 8, false), 0xff)))
 	fw = append(fw, []byte("__KEYM____ACBP__")...)
 	before := bytes.Clone(fw)
-	if err := AnimationSupport(fw); err == nil || !strings.Contains(err.Error(), "Boot Guard") {
+	if err := Parse(fw).AnimationSupport(); err == nil || !strings.Contains(err.Error(), "Boot Guard") {
 		t.Fatalf("protection not reported: %v", err)
 	}
-	if _, err := ReplaceAnimatedLogo(fw, nil, LogoFileGUID); err == nil || !strings.Contains(err.Error(), "Boot Guard") {
+	if _, err := Parse(fw).ReplaceAnimatedLogo(nil, LogoFileGUID); err == nil || !strings.Contains(err.Error(), "Boot Guard") {
 		t.Fatalf("protection bypassed: %v", err)
 	}
 	if !bytes.Equal(fw, before) {

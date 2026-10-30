@@ -43,8 +43,9 @@ export const ready = start().catch((err) => {
 });
 
 // call runs biosimage[fn](...args) in the worker and resolves to its result ({error} on
-// failure, as returned by the Go side). With a label, a busy box shows while it runs.
-export async function call(fn, args = [], label = '') {
+// failure, as returned by the Go side). With a label, a busy box shows while it runs. The
+// ArrayBuffers in transfer are moved to the worker instead of copied, and unusable afterwards.
+export async function call(fn, args = [], label = '', transfer = []) {
   await ready;
   const id = ++seq;
   return new Promise((resolve) => {
@@ -54,7 +55,7 @@ export async function call(fn, args = [], label = '') {
       updateBusy();
     }, BUSY_DELAY);
     pending.set(id, p);
-    worker.postMessage({ id, fn, args });
+    worker.postMessage({ id, fn, args }, transfer);
   });
 }
 

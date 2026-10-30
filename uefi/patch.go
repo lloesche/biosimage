@@ -136,6 +136,10 @@ type Patch struct {
 	// BootGuardWarning describes the risk that Intel Boot Guard keeps the board from starting
 	// Data (DetectBootGuard), or is empty if there is none.
 	BootGuardWarning string
+	// AnimationSize and AnimationRoom are, for ReplaceAnimatedLogo, the bytes its driver and
+	// frame-data files take in the free space of the main volume, alignment included, and the
+	// free space there was.
+	AnimationSize, AnimationRoom int
 }
 
 // ReplaceLogo returns a copy of buf with every logo file (gEfiDefaultBmpLogoGuid unless guid is

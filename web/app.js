@@ -198,9 +198,10 @@ async function build() {
 function showResult(res) {
   const c = res.changes[0];
   const capacity = res.capacity;
-  $('usage-bar').parentElement.style.display = res.animationDXE ? 'none' : '';
-  $('usage-bar').style.width = res.animationDXE ? '0%' : `${Math.min(100, (c.newSize / capacity) * 100).toFixed(1)}%`;
-  $('usage-size').textContent = res.animationDXE ? 'Animation, driver and first-frame fallback verified' : `${fmtNum(c.newSize)} / ${fmtNum(capacity)} bytes`;
+  // An animation is measured in the free space it takes; the first frame replaces the logo.
+  const [used, room] = res.animationDXE ? [res.animationSize, res.animationRoom] : [c.newSize, capacity];
+  $('usage-bar').style.width = `${Math.min(100, (used / room) * 100).toFixed(1)}%`;
+  $('usage-size').textContent = `${fmtNum(used)} / ${fmtNum(room)} bytes${res.animationDXE ? ` · ${res.animationStorage}` : ''}`;
   $('usage-text').textContent = [`${hex8(c.newOffset)} · ${c.storage}, ${c.placement}`,
     ...(res.changes.length > 1 ? [`${res.changes.length} copies`] : []), ...c.recompressed].join(' · ');
   $('bootguard-k').hidden = $('bootguard-v').hidden = !res.bootGuard;

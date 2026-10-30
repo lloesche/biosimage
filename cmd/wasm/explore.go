@@ -329,9 +329,9 @@ func describeFile(n *uefi.Node) description {
 	case f.GUID == uefi.LogoFileGUID:
 		d.name = "Boot logo"
 	case f.GUID == uefi.AnimationDriverGUID:
-		d.name = "Boot animation driver"
+		d.name = "Animation driver"
 	case f.GUID == uefi.AnimationDataGUID:
-		d.name = "Boot animation frames"
+		d.name = "Animation frames"
 	case f.Type == uefi.FileTypePad:
 		d.kind, d.name = "pad", "Pad file"
 	default:

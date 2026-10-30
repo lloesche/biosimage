@@ -54,7 +54,7 @@ function ncSetImage(which, id) {
 
 // ncButtons offers [A] for an image that has a boot animation (the patched one, if any).
 function ncButtons() {
-  $('nc-anim').hidden = !ncSource()?.animPath.length;
+  $('nc-anim').hidden = $('nc-key-anim').hidden = !ncSource()?.animPath.length;
 }
 
 // ncLoad fetches the tree of image id for the given source.

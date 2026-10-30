@@ -7,13 +7,13 @@ ASUS publishes for its mainboards.
 and an image (PNG, SVG, JPEG, ...), position the logo, and download the patched BIOS.
 Everything runs locally in WebAssembly; nothing is uploaded.
 
-![biosimage replacing the TUF GAMING boot logo of an ASUS BIOS with the Steam logo](docs/screenshot.png)
+![biosimage replacing the TUF GAMING boot logo of an ASUS BIOS with an animated Steam logo](docs/screenshot.png)
 
 A read-only, Norton Commander style **firmware explorer** shows the structure of the image
 (volumes, files, sections, checksums, compressed volumes, embedded images) with a hex view, for
 the original and the patched file, so you can see exactly what changed:
 
-![The firmware explorer showing the new logo inside the patched BIOS](docs/explorer.png)
+![The firmware explorer showing the animation driver and a preview of its frames in the patched BIOS](docs/explorer.png)
 
 There is also a command-line tool:
 
